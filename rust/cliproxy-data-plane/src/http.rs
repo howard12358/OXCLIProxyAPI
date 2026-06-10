@@ -1,17 +1,18 @@
 use axum::{Json, Router, extract::State, response::IntoResponse, routing::get};
+use cliproxy_common_types::health::ServiceState;
 use serde::Serialize;
 use tower_http::trace::TraceLayer;
 
-use crate::config::{Config, RuntimeInfo};
+use crate::runtime::{RuntimeInfo, RuntimeStateHandle};
 
 #[derive(Clone)]
 struct AppState {
-    runtime: RuntimeInfo,
+    runtime: RuntimeStateHandle,
 }
 
 #[derive(Debug, Serialize)]
 struct HealthResponse {
-    status: &'static str,
+    status: ServiceState,
     service: &'static str,
     version: &'static str,
 }
@@ -19,14 +20,12 @@ struct HealthResponse {
 #[derive(Debug, Serialize)]
 struct ReadyResponse {
     ready: bool,
+    status: ServiceState,
     runtime: RuntimeInfo,
 }
 
-pub fn router(config: Config) -> Router {
-    let state = AppState {
-        runtime: config.runtime_info(),
-    };
-
+pub fn router(runtime: RuntimeStateHandle) -> Router {
+    let state = AppState { runtime };
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
@@ -35,16 +34,19 @@ pub fn router(config: Config) -> Router {
 }
 
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
+    let runtime = state.runtime.runtime_info();
     Json(HealthResponse {
-        status: "ok",
-        service: state.runtime.service,
-        version: state.runtime.version,
+        status: runtime.state,
+        service: runtime.service,
+        version: runtime.version,
     })
 }
 
 async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
+    let runtime = state.runtime.runtime_info();
     Json(ReadyResponse {
-        ready: true,
-        runtime: state.runtime,
+        ready: matches!(runtime.state, ServiceState::Ready),
+        status: runtime.state,
+        runtime,
     })
 }

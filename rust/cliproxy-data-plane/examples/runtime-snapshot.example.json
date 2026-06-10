@@ -1,0 +1,55 @@
+{
+  "version": "2026-06-10T10:00:00Z#1",
+  "generated_at": "2026-06-10T10:00:00Z",
+  "source_instance_id": "go-cpa-main-01",
+  "listeners": {
+    "public_http": ":8317"
+  },
+  "routes": {
+    "responses": true,
+    "chat_completions": false,
+    "messages": false
+  },
+  "routing": {
+    "strategy": "fill-first",
+    "session_affinity": true,
+    "session_ttl_seconds": 3600
+  },
+  "providers": {
+    "codex": {
+      "enabled": true
+    }
+  },
+  "model_aliases": {
+    "codex": {
+      "codex-latest": "gpt-5-codex"
+    }
+  },
+  "models": {
+    "codex": [
+      "gpt-5-codex"
+    ]
+  },
+  "auth_pool": [
+    {
+      "id": "auth_codex_01",
+      "provider": "codex",
+      "priority": 100,
+      "enabled": true,
+      "supports_models": [
+        "gpt-5-codex"
+      ],
+      "labels": [
+        "paid"
+      ],
+      "cooldown_until": null
+    }
+  ],
+  "usage_queue": {
+    "enabled": true,
+    "backend": "redis"
+  },
+  "feature_flags": {
+    "enable_sse_repair": true
+  }
+}
