@@ -90,6 +90,12 @@ impl RuntimeStateHandle {
             .map(|snapshot| snapshot.version.clone())
     }
 
+    pub fn responses_route_enabled(&self) -> bool {
+        self.current_snapshot()
+            .map(|snapshot| snapshot.routes.responses)
+            .unwrap_or(false)
+    }
+
     pub fn mark_failed(&self, err: impl Into<String>) {
         let message = err.into();
         let mut meta = self

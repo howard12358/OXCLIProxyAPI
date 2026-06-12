@@ -12,6 +12,7 @@
 - runtime snapshot 契约基础类型
 - 本地文件和 HTTP snapshot 拉取
 - snapshot 校验、版本比较和运行时状态切换
+- `/v1/responses` mock ingress 垂直切片
 
 ## 当前目录结构
 
@@ -54,6 +55,24 @@ make run BIND_ADDR=127.0.0.1:4200 LOG_LEVEL=debug
 - `make test`
 - `make build`
 
+## 当前可测试接口
+
+- `GET /healthz`
+- `GET /readyz`
+- `POST /v1/responses`
+
+示例：
+
+```bash
+curl -N http://127.0.0.1:4210/v1/responses \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "gpt-5-codex",
+    "stream": true,
+    "input": "hello from rust dataplane"
+  }'
+```
+
 ## 当前里程碑状态
 
 当前已经完成里程碑 0 和里程碑 1 的基础落地：
@@ -67,7 +86,9 @@ make run BIND_ADDR=127.0.0.1:4200 LOG_LEVEL=debug
 - 支持本地文件和 HTTP snapshot 拉取
 - 支持 snapshot 校验和版本比较
 - 支持运行时状态的 `ready / degraded / failed` 切换
+- 提供 `/v1/responses` 的 mock streaming ingress
+- 支持基础请求解析、bootstrap、SSE 归一化和终态事件输出
 
 ## 下一步
 
-- 开始实现 `/v1/responses` ingress 垂直切片
+- 开始把 `/v1/responses` 从 mock upstream 接到真实 upstream runtime
