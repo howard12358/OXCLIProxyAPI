@@ -1,6 +1,6 @@
 use std::{convert::Infallible, time::Instant};
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use async_stream::stream;
 use axum::{
     Json,
@@ -9,14 +9,15 @@ use axum::{
     response::IntoResponse,
 };
 use bytes::Bytes;
-use futures_util::stream::Stream;
+use cliproxy_upstream_runtime::{UpstreamExecutionResult, UpstreamRequest, UpstreamRuntime};
+use futures_util::{StreamExt, stream::Stream};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tracing::info;
 
 use crate::runtime::RuntimeStateHandle;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ResponsesRequest {
     pub model: String,
     #[serde(default)]
@@ -67,6 +68,7 @@ struct MockSseEvent {
 
 pub async fn handle_responses(
     runtime: RuntimeStateHandle,
+    upstream: UpstreamRuntime,
     request: ResponsesRequest,
 ) -> Response<Body> {
     if !runtime.responses_route_enabled() {
@@ -84,6 +86,13 @@ pub async fn handle_responses(
         }
     };
 
+    if upstream.is_enabled() {
+        return match execute_real_upstream(upstream, request).await {
+            Ok(response) => response,
+            Err(err) => error_response(StatusCode::BAD_GATEWAY, &err.to_string(), "upstream_error"),
+        };
+    }
+
     if request.stream {
         match streaming_response(request, request_meta).await {
             Ok(response) => response,
@@ -93,6 +102,52 @@ pub async fn handle_responses(
         match non_streaming_response(request, request_meta) {
             Ok(response) => response.into_response(),
             Err(err) => error_response(StatusCode::BAD_GATEWAY, &err.to_string(), "upstream_error"),
+        }
+    }
+}
+
+async fn execute_real_upstream(
+    upstream: UpstreamRuntime,
+    request: ResponsesRequest,
+) -> Result<Response<Body>> {
+    let request_body =
+        serde_json::to_vec(&request).context("failed to serialize responses request")?;
+    match upstream
+        .execute_responses(UpstreamRequest {
+            model: request.model.clone(),
+            body: request_body,
+            stream: request.stream,
+        })
+        .await?
+    {
+        UpstreamExecutionResult::NonStreaming(response) => {
+            let _provider = response.provider;
+            let _events = response.events;
+            Ok(response_from_body(response.head, response.body))
+        }
+        UpstreamExecutionResult::Streaming(response) => {
+            let _provider = response.provider;
+            let _events = response.events;
+            let first_chunk = response.first_chunk;
+            let tail = response.stream;
+            let body = Body::from_stream(stream! {
+                yield Ok::<Bytes, Infallible>(first_chunk);
+                futures_util::pin_mut!(tail);
+                while let Some(item) = tail.next().await {
+                    match item {
+                        Ok(bytes) => yield Ok(bytes),
+                        Err(err) => {
+                            let frame = Bytes::from(format!(
+                                "event: response.error\ndata: {{\"type\":\"response.error\",\"message\":{}}}\n\n",
+                                serde_json::to_string(&err.to_string()).unwrap_or_else(|_| "\"upstream stream error\"".to_string())
+                            ));
+                            yield Ok(frame);
+                            break;
+                        }
+                    }
+                }
+            });
+            Ok(response_with_stream(response.head, body))
         }
     }
 }
@@ -378,6 +433,40 @@ fn error_response(status: StatusCode, message: &str, code: &'static str) -> Resp
         }),
     )
         .into_response()
+}
+
+fn response_from_body(
+    head: cliproxy_common_types::upstream::UpstreamResponseHead,
+    body: Bytes,
+) -> Response<Body> {
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() = StatusCode::from_u16(head.status).unwrap_or(StatusCode::OK);
+    apply_upstream_headers(response.headers_mut(), &head.headers);
+    response
+}
+
+fn response_with_stream(
+    head: cliproxy_common_types::upstream::UpstreamResponseHead,
+    body: Body,
+) -> Response<Body> {
+    let mut response = Response::new(body);
+    *response.status_mut() = StatusCode::from_u16(head.status).unwrap_or(StatusCode::OK);
+    apply_upstream_headers(response.headers_mut(), &head.headers);
+    response
+}
+
+fn apply_upstream_headers(
+    headers: &mut axum::http::HeaderMap,
+    source: &std::collections::BTreeMap<String, String>,
+) {
+    for (key, value) in source {
+        if let (Ok(name), Ok(value)) = (
+            axum::http::header::HeaderName::from_bytes(key.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            headers.insert(name, value);
+        }
+    }
 }
 
 #[cfg(test)]

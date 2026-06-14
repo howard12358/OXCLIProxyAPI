@@ -13,6 +13,7 @@
 - 本地文件和 HTTP snapshot 拉取
 - snapshot 校验、版本比较和运行时状态切换
 - `/v1/responses` mock ingress 垂直切片
+- OpenAI / Codex 上游执行运行时 v1
 
 ## 当前目录结构
 
@@ -46,6 +47,12 @@ make run BIND_ADDR=127.0.0.1:4200 LOG_LEVEL=debug
 - `CLIPROXY_SNAPSHOT_FILE`
 - `CLIPROXY_SNAPSHOT_URL`
 - `CLIPROXY_SNAPSHOT_POLL_SECONDS`
+- `CLIPROXY_OPENAI_BASE_URL`
+- `CLIPROXY_OPENAI_API_KEY`
+- `CLIPROXY_CODEX_BASE_URL`
+- `CLIPROXY_CODEX_TOKEN`
+- `CLIPROXY_CODEX_USER_AGENT`
+- `CLIPROXY_CODEX_OPENAI_BETA`
 
 常用命令：
 
@@ -73,9 +80,23 @@ curl -N http://127.0.0.1:4210/v1/responses \
   }'
 ```
 
+如果要走真实 OpenAI upstream：
+
+```bash
+CLIPROXY_OPENAI_API_KEY=your_openai_key \
+make run BIND_ADDR=127.0.0.1:4210
+```
+
+如果要走真实 Codex upstream：
+
+```bash
+CLIPROXY_CODEX_TOKEN=your_codex_token \
+make run BIND_ADDR=127.0.0.1:4210
+```
+
 ## 当前里程碑状态
 
-当前已经完成里程碑 0 和里程碑 1 的基础落地：
+当前已经完成里程碑 0 到里程碑 3 的基础落地：
 
 - 建立 Rust workspace 结构
 - 建立 `common-types` crate
@@ -86,9 +107,12 @@ curl -N http://127.0.0.1:4210/v1/responses \
 - 支持本地文件和 HTTP snapshot 拉取
 - 支持 snapshot 校验和版本比较
 - 支持运行时状态的 `ready / degraded / failed` 切换
-- 提供 `/v1/responses` 的 mock streaming ingress
-- 支持基础请求解析、bootstrap、SSE 归一化和终态事件输出
+- 提供 `/v1/responses` ingress
+- 支持 mock fallback 和真实 upstream 优先执行
+- 支持 OpenAI Responses HTTP upstream
+- 支持 Codex bearer-token HTTP upstream
+- 支持预提交 bootstrap、流式转发和非流式回包
 
 ## 下一步
 
-- 开始把 `/v1/responses` 从 mock upstream 接到真实 upstream runtime
+- 开始实现 router-core 与更明确的 auth 选择逻辑
