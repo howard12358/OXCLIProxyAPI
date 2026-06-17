@@ -12,6 +12,31 @@ pub mod health {
     }
 }
 
+pub mod routing {
+    use serde::{Deserialize, Serialize};
+
+    use crate::upstream::ProviderKind;
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum StickinessSource {
+        Strategy,
+        SessionAffinity,
+        ReboundSessionAffinity,
+        PinnedAuth,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct ExecutionPlan {
+        pub provider: ProviderKind,
+        pub model: String,
+        pub auth_id: String,
+        #[serde(default)]
+        pub retry_candidates: Vec<String>,
+        pub stickiness_source: StickinessSource,
+    }
+}
+
 pub mod snapshot {
     use serde::{Deserialize, Serialize};
     use std::collections::BTreeMap;
@@ -95,6 +120,8 @@ pub mod snapshot {
         pub id: String,
         pub provider: String,
         #[serde(default)]
+        pub auth_kind: String,
+        #[serde(default)]
         pub priority: i32,
         #[serde(default = "default_true")]
         pub enabled: bool,
@@ -102,7 +129,27 @@ pub mod snapshot {
         pub supports_models: Vec<String>,
         #[serde(default)]
         pub labels: Vec<String>,
+        #[serde(default)]
+        pub execution: AuthExecution,
         pub cooldown_until: Option<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+    pub struct AuthExecution {
+        pub codex: Option<CodexExecution>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+    pub struct CodexExecution {
+        pub access_token: String,
+        #[serde(default)]
+        pub account_id: String,
+        #[serde(default)]
+        pub base_url: String,
+        #[serde(default)]
+        pub user_agent: String,
+        #[serde(default)]
+        pub openai_beta: String,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

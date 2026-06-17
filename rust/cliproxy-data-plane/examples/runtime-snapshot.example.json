@@ -34,6 +34,7 @@
     {
       "id": "auth_codex_01",
       "provider": "codex",
+      "auth_kind": "oauth",
       "priority": 100,
       "enabled": true,
       "supports_models": [
@@ -42,6 +43,15 @@
       "labels": [
         "paid"
       ],
+      "execution": {
+        "codex": {
+          "access_token": "codex-oauth-access-token",
+          "account_id": "acct_example_01",
+          "base_url": "https://chatgpt.com/backend-api/codex",
+          "user_agent": "codex-tui/0.135.0 (Mac OS 26.5.0; arm64)",
+          "openai_beta": "responses=v1"
+        }
+      },
       "cooldown_until": null
     }
   ],

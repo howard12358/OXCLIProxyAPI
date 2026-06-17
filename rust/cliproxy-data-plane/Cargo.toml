@@ -8,6 +8,7 @@ members = [
     ".",
     "crates/common-types",
     "crates/runtime-config-client",
+    "crates/router-core",
     "crates/upstream-runtime",
 ]
 resolver = "3"
@@ -20,6 +21,7 @@ axum = "0.8"
 bytes = "1.11"
 clap = { version = "4.5", features = ["derive", "env"] }
 cliproxy-common-types = { path = "crates/common-types" }
+cliproxy-router-core = { path = "crates/router-core" }
 cliproxy-runtime-config-client = { path = "crates/runtime-config-client" }
 cliproxy-upstream-runtime = { path = "crates/upstream-runtime" }
 futures-util = "0.3"

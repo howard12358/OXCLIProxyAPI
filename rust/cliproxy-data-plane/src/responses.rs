@@ -9,6 +9,11 @@ use axum::{
     response::IntoResponse,
 };
 use bytes::Bytes;
+use cliproxy_common_types::routing::ExecutionPlan;
+use cliproxy_common_types::snapshot::{AuthRecord, RuntimeSnapshot};
+use cliproxy_router_core::{
+    PlanRequest, RouterCore, extract_codex_session_id, extract_pinned_auth_id,
+};
 use cliproxy_upstream_runtime::{UpstreamExecutionResult, UpstreamRequest, UpstreamRuntime};
 use futures_util::{StreamExt, stream::Stream};
 use serde::{Deserialize, Serialize};
@@ -68,6 +73,7 @@ struct MockSseEvent {
 
 pub async fn handle_responses(
     runtime: RuntimeStateHandle,
+    router_core: RouterCore,
     upstream: UpstreamRuntime,
     request: ResponsesRequest,
 ) -> Response<Body> {
@@ -85,41 +91,117 @@ pub async fn handle_responses(
             return error_response(StatusCode::BAD_REQUEST, &err.to_string(), "invalid_request");
         }
     };
+    let (snapshot, execution_plan) = match build_execution_plan(&runtime, &router_core, &request) {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &err.to_string(),
+                "routing_unavailable",
+            );
+        }
+    };
+    let selected_auth = auth_for_plan(snapshot.as_ref(), &execution_plan);
 
     if upstream.is_enabled() {
-        return match execute_real_upstream(upstream, request).await {
+        return match execute_real_upstream(upstream, request, &execution_plan, selected_auth).await
+        {
             Ok(response) => response,
             Err(err) => error_response(StatusCode::BAD_GATEWAY, &err.to_string(), "upstream_error"),
         };
     }
 
     if request.stream {
-        match streaming_response(request, request_meta).await {
+        match streaming_response(request, request_meta, &execution_plan).await {
             Ok(response) => response,
             Err(err) => error_response(StatusCode::BAD_GATEWAY, &err.to_string(), "upstream_error"),
         }
     } else {
-        match non_streaming_response(request, request_meta) {
+        match non_streaming_response(request, request_meta, &execution_plan) {
             Ok(response) => response.into_response(),
             Err(err) => error_response(StatusCode::BAD_GATEWAY, &err.to_string(), "upstream_error"),
         }
     }
 }
 
+fn build_execution_plan(
+    runtime: &RuntimeStateHandle,
+    router_core: &RouterCore,
+    request: &ResponsesRequest,
+) -> Result<(std::sync::Arc<RuntimeSnapshot>, ExecutionPlan)> {
+    let snapshot = runtime
+        .current_snapshot()
+        .ok_or_else(|| anyhow!("runtime snapshot is not loaded"))?;
+    let plan = router_core.plan(
+        snapshot.as_ref(),
+        PlanRequest {
+            requested_model: request.model.clone(),
+            session_id: extract_codex_session_id(request.metadata.as_ref()),
+            pinned_auth_id: extract_pinned_auth_id(request.metadata.as_ref()),
+        },
+    )?;
+    Ok((snapshot, plan))
+}
+
+fn auth_for_plan<'a>(
+    snapshot: &'a RuntimeSnapshot,
+    plan: &ExecutionPlan,
+) -> Option<&'a AuthRecord> {
+    snapshot
+        .auth_pool
+        .iter()
+        .find(|auth| auth.id == plan.auth_id)
+}
+
 async fn execute_real_upstream(
     upstream: UpstreamRuntime,
     request: ResponsesRequest,
+    execution_plan: &ExecutionPlan,
+    selected_auth: Option<&AuthRecord>,
 ) -> Result<Response<Body>> {
+    let mut upstream_request = request.clone();
+    upstream_request.model = execution_plan.model.clone();
     let request_body =
-        serde_json::to_vec(&request).context("failed to serialize responses request")?;
-    match upstream
-        .execute_responses(UpstreamRequest {
-            model: request.model.clone(),
-            body: request_body,
-            stream: request.stream,
-        })
-        .await?
-    {
+        serde_json::to_vec(&upstream_request).context("failed to serialize responses request")?;
+    info!(
+        provider = ?execution_plan.provider,
+        auth_id = %execution_plan.auth_id,
+        resolved_model = %execution_plan.model,
+        stickiness_source = ?execution_plan.stickiness_source,
+        "responses execution plan selected"
+    );
+    let upstream_result = if let Some(auth) = selected_auth {
+        if upstream.can_execute_for_auth(auth) {
+            upstream
+                .execute_responses_for_auth(
+                    auth,
+                    UpstreamRequest {
+                        model: upstream_request.model.clone(),
+                        body: request_body,
+                        stream: upstream_request.stream,
+                    },
+                )
+                .await?
+        } else {
+            upstream
+                .execute_responses(UpstreamRequest {
+                    model: upstream_request.model.clone(),
+                    body: request_body,
+                    stream: upstream_request.stream,
+                })
+                .await?
+        }
+    } else {
+        upstream
+            .execute_responses(UpstreamRequest {
+                model: upstream_request.model.clone(),
+                body: request_body,
+                stream: upstream_request.stream,
+            })
+            .await?
+    };
+
+    match upstream_result {
         UpstreamExecutionResult::NonStreaming(response) => {
             let _provider = response.provider;
             let _events = response.events;
@@ -153,10 +235,11 @@ async fn execute_real_upstream(
 }
 
 fn non_streaming_response(
-    request: ResponsesRequest,
+    _request: ResponsesRequest,
     request_meta: RequestMetadata,
+    execution_plan: &ExecutionPlan,
 ) -> Result<Json<MockCompletedResponse>> {
-    let response_id = mock_response_id(&request.model);
+    let response_id = mock_response_id(&execution_plan.model);
     let output_text = build_output_text(&request_meta);
     let output = vec![json!({
         "id": format!("{response_id}_item_0"),
@@ -178,7 +261,7 @@ fn non_streaming_response(
     Ok(Json(MockCompletedResponse {
         id: response_id,
         object: "response",
-        model: request.model,
+        model: execution_plan.model.clone(),
         status: "completed",
         output,
         usage,
@@ -188,9 +271,10 @@ fn non_streaming_response(
 async fn streaming_response(
     request: ResponsesRequest,
     request_meta: RequestMetadata,
+    execution_plan: &ExecutionPlan,
 ) -> Result<Response<Body>> {
     let start = Instant::now();
-    let events = mock_upstream_events(&request, &request_meta)?;
+    let events = mock_upstream_events(&request, &request_meta, execution_plan)?;
     let mut frames = events
         .into_iter()
         .map(|event| normalize_sse_frame(&event))
@@ -220,6 +304,8 @@ async fn streaming_response(
 
     info!(
         model = %request_meta.model,
+        resolved_model = %execution_plan.model,
+        auth_id = %execution_plan.auth_id,
         prompt_preview = %request_meta.prompt_preview,
         metadata_keys = request_meta.metadata_keys,
         first_byte_ms,
@@ -247,12 +333,13 @@ fn frame_stream(
 fn mock_upstream_events(
     request: &ResponsesRequest,
     request_meta: &RequestMetadata,
+    execution_plan: &ExecutionPlan,
 ) -> Result<Vec<MockSseEvent>> {
-    if request.model.trim().is_empty() {
+    if execution_plan.model.trim().is_empty() {
         bail!("model must not be empty");
     }
 
-    let response_id = mock_response_id(&request.model);
+    let response_id = mock_response_id(&execution_plan.model);
     let output_text = build_output_text(request_meta);
     let usage = json!({
         "input_tokens": estimate_input_tokens(request_meta),

@@ -141,6 +141,22 @@ pub fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<()> {
                 auth.id
             );
         }
+        if auth.provider.trim().eq_ignore_ascii_case("codex")
+            && auth.auth_kind.trim().eq_ignore_ascii_case("oauth")
+        {
+            let execution = auth.execution.codex.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "snapshot.auth_pool contains codex oauth auth {} without execution.codex",
+                    auth.id
+                )
+            })?;
+            if execution.access_token.trim().is_empty() {
+                bail!(
+                    "snapshot.auth_pool contains codex oauth auth {} without execution.codex.access_token",
+                    auth.id
+                );
+            }
+        }
     }
 
     Ok(())
@@ -187,10 +203,20 @@ mod tests {
             {
               "id": "auth-1",
               "provider": "codex",
+              "auth_kind": "oauth",
               "priority": 100,
               "enabled": true,
               "supports_models": ["gpt-5-codex"],
               "labels": ["paid"],
+              "execution": {
+                "codex": {
+                  "access_token": "codex-access-token",
+                  "account_id": "acct_123",
+                  "base_url": "https://chatgpt.com/backend-api/codex",
+                  "user_agent": "codex-tui/0.135.0",
+                  "openai_beta": "responses=v1"
+                }
+              },
               "cooldown_until": null
             }
           ],
@@ -216,6 +242,27 @@ mod tests {
             }));
         let snapshot = client.fetch_snapshot().await.expect("fetch snapshot");
         assert_eq!(snapshot.version, "v1");
+    }
+
+    #[tokio::test]
+    async fn fetch_snapshot_rejects_codex_oauth_without_execution_access_token() {
+        let dir = tempdir().expect("create temp dir");
+        let path = dir.path().join("snapshot.json");
+        let invalid = valid_snapshot_json().replace(
+            "\"access_token\": \"codex-access-token\"",
+            "\"access_token\": \"\"",
+        );
+        fs::write(&path, invalid).expect("write snapshot");
+
+        let client =
+            RuntimeConfigClient::new(RuntimeConfigClientConfig::new(SnapshotSource::File {
+                path,
+            }));
+        let err = client
+            .fetch_snapshot()
+            .await
+            .expect_err("expected invalid snapshot");
+        assert!(err.to_string().contains("execution.codex.access_token"));
     }
 
     #[test]

@@ -22,23 +22,64 @@
 
 `Go 负责告诉 Rust 该怎么跑，Rust 按快照独立跑流量，再把运行结果和健康信号回传。`
 
+交互点标记说明：
+
+- `【当前交互点】` 表示 Rust 侧已经有明确代码入口，接下来只差 Go CPA 接上即可
+- `【已联通】` 表示两端都已经接通
+- `【仅设计】` 表示当前还停留在设计层
+
 ## 3. 通信矩阵
 
 | 方向 | 发起方 | 接收方 | 内容 | 建议协议 | 是否热路径 | 当前状态 |
 |---|---|---|---|---|---|---|
-| 配置下发 | Rust 拉取 | Go CPA | `runtime snapshot` 全量快照 | 本地 loopback HTTP | 否 | 设计已定，Go 未实现 |
-| 快照刷新 | Rust 定时拉取 | Go CPA | 最新 `version` 对应的运行时配置 | 本地 loopback HTTP | 否 | Rust 已支持，Go 未实现 |
-| 首次启动校验 | Rust | Go CPA | 首次 snapshot 获取 | 本地 loopback HTTP | 否 | Rust 已支持，Go 未实现 |
-| 流量接入 | Client | Rust Data Plane | `/v1/responses`、后续 `/v1/chat/completions` 等请求 | HTTP / SSE | 是 | Rust 已有 mock ingress |
-| 上游执行 | Rust Data Plane | Provider | OpenAI / Codex / Claude / Gemini 请求 | HTTP / WebSocket / SSE | 是 | 设计中，未实现真实 runtime |
-| usage 输出 | Rust Data Plane | Go CPA 或队列系统 | usage 事件 | queue / HTTP / 本地接口 | 否 | 仅设计，未实现 |
-| 健康信号回传 | Rust Data Plane | Go CPA | `ready / degraded / failed`、错误摘要 | 管理接口 / 指标抓取 | 否 | Rust 本地有状态，Go 未接入 |
-| auth 健康回传 | Rust Data Plane | Go CPA | auth unhealthy、cooldown 建议 | 管理接口 / 事件流 | 否 | 仅设计 |
-| 指标采集 | 监控系统或 Go | Rust Data Plane | 请求数、首字节延迟、流时长等指标 | HTTP metrics endpoint | 否 | 仅设计 |
+| 配置下发 | Rust 拉取 | Go CPA | `runtime snapshot` 全量快照 | 本地 loopback HTTP | 否 | `【当前交互点】` Rust 已支持文件 / HTTP 拉取与原子应用，Go 正式导出接口未实现 |
+| 快照刷新 | Rust 定时拉取 | Go CPA | 最新 `version` 对应的运行时配置 | 本地 loopback HTTP | 否 | `【当前交互点】` Rust 已支持轮询、版本比较、`degraded` 降级，Go 正式接口未实现 |
+| 首次启动校验 | Rust | Go CPA | 首次 snapshot 获取 | 本地 loopback HTTP | 否 | `【当前交互点】` Rust 已支持 fail closed 行为，Go 正式接口未实现 |
+| 流量接入 | Client | Rust Data Plane | 当前聚焦 `/v1/responses`，后续再扩 `/v1/chat/completions` 等请求 | HTTP / SSE | 是 | Rust 已实现 `/v1/responses` ingress，并已接入 router-core 选路 |
+| 上游执行 | Rust Data Plane | Provider | OpenAI / Codex / Claude / Gemini 请求 | HTTP / WebSocket / SSE | 是 | Rust 已实现 OpenAI / Codex 的 `/responses` HTTP upstream v1，Claude / Gemini / WebSocket relay 仍未实现 |
+| usage 输出 | Rust Data Plane | Go CPA 或队列系统 | usage 事件 | queue / HTTP / 本地接口 | 否 | `【仅设计】` Rust 当前仅保留响应中的 usage 语义，正式 usage event 输出未实现 |
+| 健康信号回传 | Rust Data Plane | Go CPA | `ready / degraded / failed`、错误摘要 | 管理接口 / 指标抓取 | 否 | `【当前交互点】` Rust 本地已有状态与 `/healthz`、`/readyz`，Go 未接入 |
+| auth 健康回传 | Rust Data Plane | Go CPA | auth unhealthy、cooldown 建议 | 管理接口 / 事件流 | 否 | `【仅设计】` 尚未实现 |
+| 指标采集 | 监控系统或 Go | Rust Data Plane | 请求数、首字节延迟、流时长等指标 | HTTP metrics endpoint | 否 | `【仅设计】` 尚未实现 |
 | 管理写操作 | Operator / Go 管理面 | Go CPA | 配置修改、auth 管理、OAuth 生命周期控制 | Go 内部管理 API | 否 | 已在 Go 侧存在 |
-| 热路径绕过 | Rust Data Plane | Client / Provider | 请求与响应主链路 | 直接连接 | 是 | 目标架构，部分已起步 |
+| 热路径绕过 | Rust Data Plane | Client / Provider | 请求与响应主链路 | 直接连接 | 是 | 已形成 `/v1/responses -> Rust -> OpenAI/Codex upstream` 的基础闭环 |
 
-## 4. 当前最关键的两条通信链
+## 4. 当前已标出的 CPA 交互点
+
+当前真正和 CPA 相关、并且已经在 Rust 侧有明确接入位置的点，只有下面 4 个：
+
+1. 配置下发
+   - Rust 已具备消费 `runtime snapshot` 的能力
+   - 代码入口：
+     - `crates/runtime-config-client`
+     - `src/runtime.rs`
+
+2. 快照刷新
+   - Rust 已具备定时轮询、版本比较、原子切换、失败降级能力
+   - 代码入口：
+     - `crates/runtime-config-client`
+     - `src/runtime.rs`
+
+3. 首次启动校验
+   - Rust 已具备首次加载 snapshot 失败时 fail closed 的行为
+   - 代码入口：
+     - `src/app.rs`
+     - `src/runtime.rs`
+
+4. 健康信号回传
+   - Rust 已具备本地暴露健康状态的能力，但 Go 还没有消费
+   - 当前可见接口：
+     - `/healthz`
+     - `/readyz`
+还没有进入“当前交互点”的内容：
+
+- usage 回传
+- auth unhealthy / cooldown 回传
+- metrics 采集
+
+这些还没有形成可供 CPA 直接对接的稳定接口。
+
+## 5. 当前最关键的两条通信链
 
 ### 4.1 Go 到 Rust
 
@@ -66,7 +107,7 @@
 
 这条链当前还没有完全定死协议，但已经明确这类回传不应把 Go 重新拉回请求主链路。
 
-## 5. 热路径与非热路径边界
+## 6. 热路径与非热路径边界
 
 ### 5.1 热路径
 
@@ -89,34 +130,60 @@
 
 这些通信更关注正确性、可恢复性和可观测性，而不是单请求延迟。
 
-## 6. 当前实现状态
+## 7. 当前实现状态
 
-### 6.1 Rust 已实现
+### 7.1 Rust 已实现
 
 - 本地文件 snapshot 拉取
 - HTTP snapshot 拉取能力
 - snapshot 基础校验
 - snapshot 版本比较
+- snapshot 原子切换
 - 运行时状态切换：`ready / degraded / failed`
 - `/healthz`
 - `/readyz`
-- `/v1/responses` mock ingress
+- `/v1/responses` ingress
+- OpenAI `/responses` upstream HTTP 执行
+- Codex `/responses` upstream HTTP 执行
+- `router-core` 第一版
+- `ExecutionPlan`
+- model alias 解析
+- `fill-first`
+- 最高 priority 层内 `round-robin`
+- session affinity TTL
+- pinned auth 语义保留
+- retry candidates 产出
+- 按 `ExecutionPlan.auth_id` 驱动 Codex OAuth `/responses` 上游执行
+- `/v1/responses` 热路径接入 router-core 选路
 
-### 6.2 Rust 未实现
+### 7.2 Rust 未实现
 
-- 真实 upstream runtime
 - usage 事件输出
 - auth 健康信号回传
 - cooldown 建议回传
 - metrics endpoint
+- Claude / Gemini upstream adapter
+- WebSocket relay 型 upstream runtime
+- `/v1/chat/completions`、`/v1/messages` ingress
 
-### 6.3 Go 未实现
+### 7.3 Go 未实现
 
 - 正式的 runtime snapshot 导出接口
 - 消费 Rust usage / 健康 / auth 信号的接口
 - 真实流量切到 Rust 数据平面的入口
 
-## 7. 建议的最小落地顺序
+### 7.4 当前里程碑对应关系
+
+- 里程碑 0：已完成
+- 里程碑 1：已完成
+- 里程碑 2：已完成
+- 里程碑 3：基础完成
+- 里程碑 4：已完成收敛版本
+  - 范围限定为 Codex 下游只服务 `/v1/responses`
+  - 已完成选路决策与热路径接入
+  - 已完成按 `auth_id` 的 Codex OAuth 执行绑定
+
+## 8. 建议的最小落地顺序
 
 从通信矩阵看，最先应当打通的不是所有通信，而是最小闭环：
 
@@ -126,7 +193,7 @@
 4. Rust 向外暴露可供观测的健康和指标
 5. 再逐步增加 usage / auth 健康 / cooldown 回传
 
-## 8. 结论
+## 9. 结论
 
 当前设计里的 CPA 与数据平面通信，本质上不是“两个服务互相代理请求”，而是：
 

@@ -1,0 +1,10 @@
+[package]
+name = "cliproxy-router-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+cliproxy-common-types = { path = "../common-types" }
+serde_json = "1.0"
+time = { version = "0.3", features = ["formatting", "parsing"] }

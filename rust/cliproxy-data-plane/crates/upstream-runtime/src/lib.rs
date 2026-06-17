@@ -2,7 +2,10 @@ use std::{collections::BTreeMap, pin::Pin, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail};
 use bytes::Bytes;
-use cliproxy_common_types::upstream::{ProviderKind, StreamEvent, UpstreamResponseHead};
+use cliproxy_common_types::{
+    snapshot::{AuthRecord, CodexExecution},
+    upstream::{ProviderKind, StreamEvent, UpstreamResponseHead},
+};
 use futures_util::{Stream, StreamExt};
 use reqwest::{
     Client, Method, Response,
@@ -87,6 +90,22 @@ impl UpstreamRuntime {
         None
     }
 
+    pub fn can_execute_for_auth(&self, auth: &AuthRecord) -> bool {
+        match auth.provider.trim().to_ascii_lowercase().as_str() {
+            "codex" => auth
+                .execution
+                .codex
+                .as_ref()
+                .map(|execution| {
+                    non_empty(Some(execution.access_token.as_str())).is_some()
+                        && (non_empty(Some(execution.base_url.as_str())).is_some()
+                            || self.config.codex.is_some())
+                })
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
     pub async fn execute_responses(
         &self,
         request: UpstreamRequest,
@@ -101,6 +120,24 @@ impl UpstreamRuntime {
         match provider {
             ProviderKind::OpenAi => self.execute_openai(request).await,
             ProviderKind::Codex => self.execute_codex(request).await,
+            ProviderKind::Mock => bail!("mock provider is not handled by upstream runtime"),
+        }
+    }
+
+    pub async fn execute_responses_for_auth(
+        &self,
+        auth: &AuthRecord,
+        request: UpstreamRequest,
+    ) -> Result<UpstreamExecutionResult> {
+        let provider = match auth.provider.trim().to_ascii_lowercase().as_str() {
+            "codex" => ProviderKind::Codex,
+            "openai" | "openai-compatibility" => ProviderKind::OpenAi,
+            other => bail!("unsupported auth provider for upstream execution: {other}"),
+        };
+
+        match provider {
+            ProviderKind::Codex => self.execute_codex_with_auth(auth, request).await,
+            ProviderKind::OpenAi => self.execute_openai(request).await,
             ProviderKind::Mock => bail!("mock provider is not handled by upstream runtime"),
         }
     }
@@ -145,6 +182,50 @@ impl UpstreamRuntime {
             headers.insert(
                 "OpenAI-Beta",
                 HeaderValue::from_str(beta).context("invalid codex openai-beta header value")?,
+            );
+        }
+        self.execute_http(ProviderKind::Codex, &url, headers, request)
+            .await
+    }
+
+    async fn execute_codex_with_auth(
+        &self,
+        auth: &AuthRecord,
+        request: UpstreamRequest,
+    ) -> Result<UpstreamExecutionResult> {
+        let execution = auth
+            .execution
+            .codex
+            .as_ref()
+            .ok_or_else(|| anyhow!("codex auth {} missing execution.codex", auth.id))?;
+        let config = self.config.codex.as_ref();
+        let url = format!(
+            "{}/responses",
+            codex_base_url(execution, config)?.trim_end_matches('/')
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", execution.access_token))
+                .context("invalid codex auth access token header value")?,
+        );
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_str(&codex_user_agent(execution, config))
+                .context("invalid codex auth user agent value")?,
+        );
+        if let Some(account_id) = non_empty(Some(execution.account_id.as_str())) {
+            headers.insert(
+                "Chatgpt-Account-Id",
+                HeaderValue::from_str(account_id)
+                    .context("invalid codex account id header value")?,
+            );
+        }
+        if let Some(beta) = codex_openai_beta(execution, config) {
+            headers.insert(
+                "OpenAI-Beta",
+                HeaderValue::from_str(&beta).context("invalid codex openai-beta header value")?,
             );
         }
         self.execute_http(ProviderKind::Codex, &url, headers, request)
@@ -260,6 +341,33 @@ fn provider_name(provider: ProviderKind) -> &'static str {
     }
 }
 
+fn codex_base_url(execution: &CodexExecution, fallback: Option<&CodexConfig>) -> Result<String> {
+    if let Some(value) = non_empty(Some(execution.base_url.as_str())) {
+        return Ok(value.to_string());
+    }
+    if let Some(config) = fallback.and_then(|config| non_empty(Some(config.base_url.as_str()))) {
+        return Ok(config.to_string());
+    }
+    bail!("codex base_url is not configured")
+}
+
+fn codex_user_agent(execution: &CodexExecution, fallback: Option<&CodexConfig>) -> String {
+    non_empty(Some(execution.user_agent.as_str()))
+        .or_else(|| fallback.and_then(|config| non_empty(Some(config.user_agent.as_str()))))
+        .unwrap_or("cliproxy-data-plane/0.1.0")
+        .to_string()
+}
+
+fn codex_openai_beta(execution: &CodexExecution, fallback: Option<&CodexConfig>) -> Option<String> {
+    non_empty(Some(execution.openai_beta.as_str()))
+        .map(ToOwned::to_owned)
+        .or_else(|| fallback.and_then(|config| config.openai_beta.clone()))
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,8 +409,12 @@ mod tests {
 
             if stream {
                 let body = Body::from(format!(
-                    "event: response.created\ndata: {{\"provider\":\"{}\"}}\n\n",
-                    provider
+                    "event: response.created\ndata: {{\"provider\":\"{}\",\"account_id\":\"{}\"}}\n\n",
+                    provider,
+                    headers
+                        .get("chatgpt-account-id")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
                 ));
                 (
                     StatusCode::OK,
@@ -313,7 +425,20 @@ mod tests {
             } else {
                 Json(json!({
                     "provider": provider,
-                    "echo_model": payload.get("model").and_then(|value| value.as_str()).unwrap_or_default()
+                    "echo_model": payload.get("model").and_then(|value| value.as_str()).unwrap_or_default(),
+                    "auth": auth,
+                    "account_id": headers
+                        .get("chatgpt-account-id")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default(),
+                    "user_agent": headers
+                        .get("user-agent")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default(),
+                    "openai_beta": headers
+                        .get("openai-beta")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
                 }))
                 .into_response()
             }
@@ -414,6 +539,64 @@ mod tests {
                 let payload: Value =
                     serde_json::from_slice(&response.body).expect("parse response body");
                 assert_eq!(payload["provider"], "codex");
+            }
+            UpstreamExecutionResult::Streaming(_) => panic!("expected non-streaming response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_responses_for_auth_uses_selected_codex_oauth_credential() {
+        let base_url = spawn_upstream_server().await;
+        let runtime = UpstreamRuntime::new(UpstreamRuntimeConfig {
+            openai: None,
+            codex: Some(CodexConfig {
+                base_url: base_url.clone(),
+                token: "global-codex-token".to_string(),
+                user_agent: "cliproxy-global".to_string(),
+                openai_beta: Some("responses=v1".to_string()),
+            }),
+        });
+        let auth = AuthRecord {
+            id: "auth-codex-oauth-1".to_string(),
+            provider: "codex".to_string(),
+            auth_kind: "oauth".to_string(),
+            priority: 100,
+            enabled: true,
+            supports_models: vec!["gpt-5-codex".to_string()],
+            labels: vec!["paid".to_string()],
+            execution: cliproxy_common_types::snapshot::AuthExecution {
+                codex: Some(CodexExecution {
+                    access_token: "auth-specific-token".to_string(),
+                    account_id: "acct_42".to_string(),
+                    base_url,
+                    user_agent: "codex-tui/auth-42".to_string(),
+                    openai_beta: "responses=auth".to_string(),
+                }),
+            },
+            cooldown_until: None,
+        };
+
+        let result = runtime
+            .execute_responses_for_auth(
+                &auth,
+                UpstreamRequest {
+                    model: "gpt-5-codex".to_string(),
+                    body: br#"{"model":"gpt-5-codex","stream":false}"#.to_vec(),
+                    stream: false,
+                },
+            )
+            .await
+            .expect("execute upstream");
+
+        match result {
+            UpstreamExecutionResult::NonStreaming(response) => {
+                let payload: Value =
+                    serde_json::from_slice(&response.body).expect("parse response body");
+                assert_eq!(payload["provider"], "openai");
+                assert_eq!(payload["auth"], "Bearer auth-specific-token");
+                assert_eq!(payload["account_id"], "acct_42");
+                assert_eq!(payload["user_agent"], "codex-tui/auth-42");
+                assert_eq!(payload["openai_beta"], "responses=auth");
             }
             UpstreamExecutionResult::Streaming(_) => panic!("expected non-streaming response"),
         }

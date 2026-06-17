@@ -5,6 +5,7 @@ use axum::{
     routing::{get, post},
 };
 use cliproxy_common_types::health::ServiceState;
+use cliproxy_router_core::RouterCore;
 use cliproxy_upstream_runtime::UpstreamRuntime;
 use serde::Serialize;
 use tower_http::trace::TraceLayer;
@@ -15,6 +16,7 @@ use crate::runtime::{RuntimeInfo, RuntimeStateHandle};
 #[derive(Clone)]
 struct AppState {
     runtime: RuntimeStateHandle,
+    router_core: RouterCore,
     upstream: UpstreamRuntime,
 }
 
@@ -33,7 +35,11 @@ struct ReadyResponse {
 }
 
 pub fn router(runtime: RuntimeStateHandle, upstream: UpstreamRuntime) -> Router {
-    let state = AppState { runtime, upstream };
+    let state = AppState {
+        runtime,
+        router_core: RouterCore::new(),
+        upstream,
+    };
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
@@ -65,7 +71,9 @@ async fn post_responses(
     payload: Result<Json<ResponsesRequest>, JsonRejection>,
 ) -> impl IntoResponse {
     match payload {
-        Ok(Json(request)) => handle_responses(state.runtime, state.upstream, request).await,
+        Ok(Json(request)) => {
+            handle_responses(state.runtime, state.router_core, state.upstream, request).await
+        }
         Err(err) => (
             axum::http::StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
@@ -96,8 +104,12 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::{config::Config, runtime::RuntimeStateHandle};
-    use cliproxy_common_types::snapshot::RuntimeSnapshot;
-    use cliproxy_upstream_runtime::{OpenAiConfig, UpstreamRuntime, UpstreamRuntimeConfig};
+    use cliproxy_common_types::snapshot::{
+        AuthExecution, AuthRecord, CodexExecution, ProviderConfig, RoutingStrategy, RuntimeSnapshot,
+    };
+    use cliproxy_upstream_runtime::{
+        CodexConfig, OpenAiConfig, UpstreamRuntime, UpstreamRuntimeConfig,
+    };
     use serde_json::json;
 
     fn test_runtime(responses_enabled: bool) -> RuntimeStateHandle {
@@ -123,8 +135,73 @@ mod tests {
         };
         snapshot.listeners.public_http = ":8317".to_string();
         snapshot.routes.responses = responses_enabled;
+        snapshot
+            .providers
+            .insert("codex".to_string(), ProviderConfig { enabled: true });
+        snapshot.model_aliases.insert(
+            "codex".to_string(),
+            std::collections::BTreeMap::from([(
+                "codex-latest".to_string(),
+                "gpt-5-codex".to_string(),
+            )]),
+        );
+        snapshot
+            .models
+            .insert("codex".to_string(), vec!["gpt-5-codex".to_string()]);
+        snapshot.auth_pool.push(codex_oauth_auth(
+            "auth-codex-1",
+            100,
+            "codex-access-token",
+            "acct_http_test",
+            None,
+        ));
         runtime.apply_snapshot(snapshot);
         runtime
+    }
+
+    fn test_runtime_with_auths(
+        responses_enabled: bool,
+        strategy: RoutingStrategy,
+        auths: Vec<AuthRecord>,
+    ) -> RuntimeStateHandle {
+        let runtime = test_runtime(responses_enabled);
+        let mut snapshot = runtime
+            .current_snapshot()
+            .expect("snapshot")
+            .as_ref()
+            .clone();
+        snapshot.routing.strategy = strategy;
+        snapshot.auth_pool = auths;
+        runtime.apply_snapshot(snapshot);
+        runtime
+    }
+
+    fn codex_oauth_auth(
+        id: &str,
+        priority: i32,
+        access_token: &str,
+        account_id: &str,
+        base_url: Option<&str>,
+    ) -> AuthRecord {
+        AuthRecord {
+            id: id.to_string(),
+            provider: "codex".to_string(),
+            auth_kind: "oauth".to_string(),
+            priority,
+            enabled: true,
+            supports_models: vec!["gpt-5-codex".to_string()],
+            labels: vec!["paid".to_string()],
+            execution: AuthExecution {
+                codex: Some(CodexExecution {
+                    access_token: access_token.to_string(),
+                    account_id: account_id.to_string(),
+                    base_url: base_url.unwrap_or_default().to_string(),
+                    user_agent: format!("codex-tui/{id}"),
+                    openai_beta: "responses=v1".to_string(),
+                }),
+            },
+            cooldown_until: None,
+        }
     }
 
     fn test_upstream() -> UpstreamRuntime {
@@ -164,7 +241,19 @@ mod tests {
                 AxumJson(json!({
                     "provider": "openai",
                     "auth": auth,
-                    "model": payload["model"]
+                    "model": payload["model"],
+                    "account_id": headers
+                        .get("chatgpt-account-id")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default(),
+                    "user_agent": headers
+                        .get("user-agent")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default(),
+                    "openai_beta": headers
+                        .get("openai-beta")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
                 }))
                 .into_response()
             }
@@ -191,6 +280,18 @@ mod tests {
         })
     }
 
+    fn codex_upstream(base_url: String) -> UpstreamRuntime {
+        UpstreamRuntime::new(UpstreamRuntimeConfig {
+            openai: None,
+            codex: Some(CodexConfig {
+                base_url,
+                token: String::new(),
+                user_agent: "cliproxy-global".to_string(),
+                openai_beta: Some("responses=v1".to_string()),
+            }),
+        })
+    }
+
     #[tokio::test]
     async fn responses_route_returns_not_found_when_disabled() {
         let app = router(test_runtime(false), test_upstream());
@@ -201,7 +302,7 @@ mod tests {
                     .uri("/v1/responses")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        json!({"model":"gpt-5","stream":true,"input":"hello"}).to_string(),
+                        json!({"model":"codex-latest","stream":true,"input":"hello"}).to_string(),
                     ))
                     .expect("build request"),
             )
@@ -221,7 +322,7 @@ mod tests {
                     .uri("/v1/responses")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        json!({"model":"gpt-5","stream":true,"input":"hello"}).to_string(),
+                        json!({"model":"codex-latest","stream":true,"input":"hello"}).to_string(),
                     ))
                     .expect("build request"),
             )
@@ -260,7 +361,7 @@ mod tests {
                     .uri("/v1/responses")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        json!({"model":"gpt-5","stream":false,"input":"hello"}).to_string(),
+                        json!({"model":"codex-latest","stream":false,"input":"hello"}).to_string(),
                     ))
                     .expect("build request"),
             )
@@ -280,6 +381,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn responses_route_resolves_codex_alias_before_upstream_execution() {
+        let upstream_url = spawn_openai_upstream().await;
+        let app = router(test_runtime(true), openai_upstream(upstream_url));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"model":"codex-latest","stream":false,"input":"hello"}).to_string(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("call app");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let payload: Value = serde_json::from_slice(&body).expect("parse body");
+        assert_eq!(payload["model"], "gpt-5-codex");
+    }
+
+    #[tokio::test]
     async fn responses_streaming_prefers_real_openai_upstream() {
         let upstream_url = spawn_openai_upstream().await;
         let app = router(test_runtime(true), openai_upstream(upstream_url));
@@ -290,7 +420,7 @@ mod tests {
                     .uri("/v1/responses")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        json!({"model":"gpt-5","stream":true,"input":"hello"}).to_string(),
+                        json!({"model":"codex-latest","stream":true,"input":"hello"}).to_string(),
                     ))
                     .expect("build request"),
             )
@@ -307,5 +437,121 @@ mod tests {
         let text = String::from_utf8(body.to_vec()).expect("valid utf8");
         assert!(text.contains("\"provider\":\"openai\""));
         assert!(text.contains("Bearer openai-key"));
+    }
+
+    #[tokio::test]
+    async fn responses_route_executes_selected_codex_oauth_auth_end_to_end() {
+        let upstream_url = spawn_openai_upstream().await;
+        let app = router(
+            test_runtime_with_auths(
+                true,
+                RoutingStrategy::RoundRobin,
+                vec![
+                    codex_oauth_auth(
+                        "auth-codex-a",
+                        100,
+                        "codex-token-a",
+                        "acct_a",
+                        Some(&upstream_url),
+                    ),
+                    codex_oauth_auth(
+                        "auth-codex-b",
+                        100,
+                        "codex-token-b",
+                        "acct_b",
+                        Some(&upstream_url),
+                    ),
+                ],
+            ),
+            codex_upstream(upstream_url),
+        );
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model":"codex-latest",
+                            "stream":false,
+                            "input":"hello",
+                            "metadata":{"user_id":"{\"device_id\":\"d1\",\"account_uuid\":\"\",\"session_id\":\"session-1\"}"}
+                        })
+                        .to_string(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("call app");
+        let first_body = first
+            .into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let first_payload: Value = serde_json::from_slice(&first_body).expect("parse body");
+        assert_eq!(first_payload["auth"], "Bearer codex-token-a");
+        assert_eq!(first_payload["account_id"], "acct_a");
+
+        let second = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model":"codex-latest",
+                            "stream":false,
+                            "input":"next",
+                            "metadata":{"user_id":"{\"device_id\":\"d1\",\"account_uuid\":\"\",\"session_id\":\"session-1\"}"}
+                        })
+                        .to_string(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("call app");
+        let second_body = second
+            .into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let second_payload: Value = serde_json::from_slice(&second_body).expect("parse body");
+        assert_eq!(second_payload["auth"], "Bearer codex-token-a");
+
+        let third = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model":"codex-latest",
+                            "stream":false,
+                            "input":"other",
+                            "metadata":{"user_id":"{\"device_id\":\"d2\",\"account_uuid\":\"\",\"session_id\":\"session-2\"}"}
+                        })
+                        .to_string(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("call app");
+        let third_body = third
+            .into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let third_payload: Value = serde_json::from_slice(&third_body).expect("parse body");
+        assert_eq!(third_payload["auth"], "Bearer codex-token-b");
+        assert_eq!(third_payload["account_id"], "acct_b");
     }
 }
