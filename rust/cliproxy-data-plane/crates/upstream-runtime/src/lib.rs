@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, pin::Pin, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    pin::Pin,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use bytes::Bytes;
@@ -9,11 +14,11 @@ use cliproxy_common_types::{
 use futures_util::{Stream, StreamExt};
 use reqwest::{
     Client, Method, Response,
-    header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT},
+    header::{ACCEPT, AUTHORIZATION, CONNECTION, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT},
 };
 use tracing::info;
-
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>;
+const CODEX_ORIGINATOR: &str = "codex-tui";
 
 #[derive(Debug, Clone)]
 pub struct OpenAiConfig {
@@ -156,6 +161,7 @@ impl UpstreamRuntime {
                 .context("invalid openai api key header value")?,
         );
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        apply_transport_headers(&mut headers, request.stream);
         self.execute_http(ProviderKind::OpenAi, &url, headers, request)
             .await
     }
@@ -184,6 +190,8 @@ impl UpstreamRuntime {
                 HeaderValue::from_str(beta).context("invalid codex openai-beta header value")?,
             );
         }
+        apply_transport_headers(&mut headers, request.stream);
+        apply_codex_headers(&mut headers, &config.user_agent, None)?;
         self.execute_http(ProviderKind::Codex, &url, headers, request)
             .await
     }
@@ -228,6 +236,12 @@ impl UpstreamRuntime {
                 HeaderValue::from_str(&beta).context("invalid codex openai-beta header value")?,
             );
         }
+        apply_transport_headers(&mut headers, request.stream);
+        apply_codex_headers(
+            &mut headers,
+            &codex_user_agent(execution, config),
+            non_empty(Some(execution.account_id.as_str())),
+        )?;
         self.execute_http(ProviderKind::Codex, &url, headers, request)
             .await
     }
@@ -364,6 +378,48 @@ fn codex_openai_beta(execution: &CodexExecution, fallback: Option<&CodexConfig>)
         .or_else(|| fallback.and_then(|config| config.openai_beta.clone()))
 }
 
+fn apply_transport_headers(headers: &mut HeaderMap, stream: bool) {
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static(if stream {
+            "text/event-stream"
+        } else {
+            "application/json"
+        }),
+    );
+    headers.insert(CONNECTION, HeaderValue::from_static("Keep-Alive"));
+}
+
+fn apply_codex_headers(
+    headers: &mut HeaderMap,
+    user_agent: &str,
+    account_id: Option<&str>,
+) -> Result<()> {
+    headers.insert("Originator", HeaderValue::from_static(CODEX_ORIGINATOR));
+    if user_agent.contains("Mac OS") {
+        headers.insert(
+            "Session_id",
+            HeaderValue::from_str(&generated_session_id())
+                .context("invalid codex session_id header value")?,
+        );
+    }
+    if let Some(account_id) = account_id {
+        headers.insert(
+            "Chatgpt-Account-Id",
+            HeaderValue::from_str(account_id).context("invalid codex account id header value")?,
+        );
+    }
+    Ok(())
+}
+
+fn generated_session_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("rs-session-{nanos}")
+}
+
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
@@ -427,6 +483,22 @@ mod tests {
                     "provider": provider,
                     "echo_model": payload.get("model").and_then(|value| value.as_str()).unwrap_or_default(),
                     "auth": auth,
+                    "accept": headers
+                        .get("accept")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default(),
+                    "connection": headers
+                        .get("connection")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default(),
+                    "originator": headers
+                        .get("originator")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default(),
+                    "session_id": headers
+                        .get("session_id")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default(),
                     "account_id": headers
                         .get("chatgpt-account-id")
                         .and_then(|value| value.to_str().ok())
@@ -594,6 +666,10 @@ mod tests {
                     serde_json::from_slice(&response.body).expect("parse response body");
                 assert_eq!(payload["provider"], "openai");
                 assert_eq!(payload["auth"], "Bearer auth-specific-token");
+                assert_eq!(payload["accept"], "application/json");
+                assert_eq!(payload["connection"], "Keep-Alive");
+                assert_eq!(payload["originator"], "codex-tui");
+                assert!(payload["session_id"].as_str().unwrap_or_default().len() > 0);
                 assert_eq!(payload["account_id"], "acct_42");
                 assert_eq!(payload["user_agent"], "codex-tui/auth-42");
                 assert_eq!(payload["openai_beta"], "responses=auth");

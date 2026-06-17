@@ -614,6 +614,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/config", s.mgmt.GetConfig)
 		mgmt.GET("/config.yaml", s.mgmt.GetConfigYAML)
 		mgmt.PUT("/config.yaml", s.mgmt.PutConfigYAML)
+		mgmt.GET("/runtime-snapshot", s.mgmt.GetRuntimeSnapshot)
 		mgmt.GET("/latest-version", s.mgmt.GetLatestVersion)
 		mgmt.GET("/plugins", s.mgmt.ListPlugins)
 		mgmt.GET("/plugin-store", s.mgmt.ListPluginStore)

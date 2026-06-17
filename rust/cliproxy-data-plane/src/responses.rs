@@ -22,17 +22,21 @@ use tracing::info;
 
 use crate::runtime::RuntimeStateHandle;
 
+const DEFAULT_CODEX_INSTRUCTIONS: &str = "You are Codex. Fulfill the user's request.";
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ResponsesRequest {
     pub model: String,
     #[serde(default)]
     pub stream: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,7 +107,7 @@ pub async fn handle_responses(
     };
     let selected_auth = auth_for_plan(snapshot.as_ref(), &execution_plan);
 
-    if upstream.is_enabled() {
+    if upstream_enabled_for_request(&upstream, selected_auth) {
         return match execute_real_upstream(upstream, request, &execution_plan, selected_auth).await
         {
             Ok(response) => response,
@@ -153,13 +157,20 @@ fn auth_for_plan<'a>(
         .find(|auth| auth.id == plan.auth_id)
 }
 
+fn upstream_enabled_for_request(upstream: &UpstreamRuntime, selected_auth: Option<&AuthRecord>) -> bool {
+    upstream.is_enabled()
+        || selected_auth
+            .map(|auth| upstream.can_execute_for_auth(auth))
+            .unwrap_or(false)
+}
+
 async fn execute_real_upstream(
     upstream: UpstreamRuntime,
     request: ResponsesRequest,
     execution_plan: &ExecutionPlan,
     selected_auth: Option<&AuthRecord>,
 ) -> Result<Response<Body>> {
-    let mut upstream_request = request.clone();
+    let mut upstream_request = normalize_upstream_request(request, execution_plan);
     upstream_request.model = execution_plan.model.clone();
     let request_body =
         serde_json::to_vec(&upstream_request).context("failed to serialize responses request")?;
@@ -232,6 +243,44 @@ async fn execute_real_upstream(
             Ok(response_with_stream(response.head, body))
         }
     }
+}
+
+fn normalize_upstream_request(
+    mut request: ResponsesRequest,
+    execution_plan: &ExecutionPlan,
+) -> ResponsesRequest {
+    if execution_plan.provider != cliproxy_common_types::upstream::ProviderKind::Codex {
+        return request;
+    }
+
+    request.store = Some(false);
+    request.metadata = None;
+
+    if request
+        .instructions
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        request.instructions = Some(DEFAULT_CODEX_INSTRUCTIONS.to_string());
+    }
+
+    if let Some(Value::String(text)) = request.input.take() {
+        request.input = Some(json!([
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": text
+                    }
+                ]
+            }
+        ]));
+    }
+
+    request
 }
 
 fn non_streaming_response(
@@ -579,11 +628,74 @@ mod tests {
             input: Some(json!([{"content":"hello world from input"}])),
             instructions: None,
             metadata: Some(json!({"client":"test"})),
+            store: None,
         };
 
         let meta = extract_metadata(&request).expect("extract metadata");
         assert_eq!(meta.model, "gpt-5");
         assert!(meta.prompt_preview.contains("hello world"));
         assert_eq!(meta.metadata_keys, 1);
+    }
+
+    #[test]
+    fn normalize_upstream_request_adds_codex_defaults() {
+        let request = ResponsesRequest {
+            model: "codex-latest".to_string(),
+            stream: false,
+            input: Some(Value::String("hello from codex".to_string())),
+            instructions: None,
+            metadata: None,
+            store: None,
+        };
+        let plan = ExecutionPlan {
+            provider: cliproxy_common_types::upstream::ProviderKind::Codex,
+            model: "gpt-5.5".to_string(),
+            auth_id: "auth-1".to_string(),
+            retry_candidates: vec![],
+            stickiness_source: cliproxy_common_types::routing::StickinessSource::Strategy,
+        };
+
+        let normalized = normalize_upstream_request(request, &plan);
+        assert_eq!(normalized.store, Some(false));
+        assert_eq!(
+            normalized.instructions.as_deref(),
+            Some(DEFAULT_CODEX_INSTRUCTIONS)
+        );
+        assert_eq!(normalized.input, Some(json!([
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "hello from codex"
+                    }
+                ]
+            }
+        ])));
+    }
+
+    #[test]
+    fn normalize_upstream_request_preserves_non_codex_request() {
+        let request = ResponsesRequest {
+            model: "gpt-5".to_string(),
+            stream: false,
+            input: Some(json!("hello")),
+            instructions: None,
+            metadata: Some(json!({"client":"test"})),
+            store: None,
+        };
+        let plan = ExecutionPlan {
+            provider: cliproxy_common_types::upstream::ProviderKind::OpenAi,
+            model: "gpt-5".to_string(),
+            auth_id: "auth-1".to_string(),
+            retry_candidates: vec![],
+            stickiness_source: cliproxy_common_types::routing::StickinessSource::Strategy,
+        };
+
+        let normalized = normalize_upstream_request(request.clone(), &plan);
+        assert_eq!(normalized.model, request.model);
+        assert_eq!(normalized.input, request.input);
+        assert_eq!(normalized.instructions, request.instructions);
+        assert_eq!(normalized.store, request.store);
     }
 }

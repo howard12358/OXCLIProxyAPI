@@ -242,6 +242,7 @@ mod tests {
                     "provider": "openai",
                     "auth": auth,
                     "model": payload["model"],
+                    "received_payload": payload,
                     "account_id": headers
                         .get("chatgpt-account-id")
                         .and_then(|value| value.to_str().ok())
@@ -553,5 +554,124 @@ mod tests {
         let third_payload: Value = serde_json::from_slice(&third_body).expect("parse body");
         assert_eq!(third_payload["auth"], "Bearer codex-token-b");
         assert_eq!(third_payload["account_id"], "acct_b");
+    }
+
+    #[tokio::test]
+    async fn responses_route_executes_auth_bound_codex_upstream_without_global_token() {
+        let upstream_url = spawn_openai_upstream().await;
+        let app = router(
+            test_runtime_with_auths(
+                true,
+                RoutingStrategy::FillFirst,
+                vec![codex_oauth_auth(
+                    "auth-codex-a",
+                    100,
+                    "codex-token-a",
+                    "acct_a",
+                    Some(&upstream_url),
+                )],
+            ),
+            test_upstream(),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model":"codex-latest",
+                            "stream":false,
+                            "input":"hello"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("call app");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let payload: Value = serde_json::from_slice(&body).expect("parse body");
+        assert_eq!(payload["provider"], "openai");
+        assert_eq!(payload["auth"], "Bearer codex-token-a");
+        assert_eq!(payload["account_id"], "acct_a");
+    }
+
+    #[tokio::test]
+    async fn responses_route_normalizes_codex_payload_for_upstream() {
+        let upstream_url = spawn_openai_upstream().await;
+        let app = router(
+            test_runtime_with_auths(
+                true,
+                RoutingStrategy::FillFirst,
+                vec![codex_oauth_auth(
+                    "auth-codex-a",
+                    100,
+                    "codex-token-a",
+                    "acct_a",
+                    Some(&upstream_url),
+                )],
+            ),
+            test_upstream(),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model":"codex-latest",
+                            "stream":false,
+                            "input":"hello from codex",
+                            "metadata":{"client":"codex-test"}
+                        })
+                        .to_string(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("call app");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let payload: Value = serde_json::from_slice(&body).expect("parse body");
+        assert_eq!(payload["auth"], "Bearer codex-token-a");
+        assert_eq!(payload["received_payload"]["store"], false);
+        assert_eq!(
+            payload["received_payload"]["instructions"]
+                .as_str()
+                .expect("instructions string"),
+            "You are Codex. Fulfill the user's request."
+        );
+        assert_eq!(
+            payload["received_payload"]["input"][0]["role"],
+            "user"
+        );
+        assert_eq!(
+            payload["received_payload"]["input"][0]["content"][0]["type"],
+            "input_text"
+        );
+        assert_eq!(
+            payload["received_payload"]["input"][0]["content"][0]["text"],
+            "hello from codex"
+        );
+        assert!(payload["received_payload"].get("metadata").is_none());
     }
 }

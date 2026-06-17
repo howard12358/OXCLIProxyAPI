@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -264,6 +265,81 @@ func TestManagementPluginsRouteRegistered(t *testing.T) {
 	server.engine.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("delete status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+}
+
+func TestManagementRuntimeSnapshotRoute(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "test-management-key")
+
+	server := newTestServer(t)
+	_, err := server.handlers.AuthManager.Register(context.Background(), &auth.Auth{
+		ID:       "auth-codex-1",
+		Provider: "codex",
+		Status:   auth.StatusActive,
+		Attributes: map[string]string{
+			"auth_kind": "oauth",
+			"priority":  "100",
+			"plan_type": "plus",
+		},
+		Metadata: map[string]any{
+			"access_token": "token-1",
+			"account_id":   "acct-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/runtime-snapshot", nil)
+	req.Header.Set("Authorization", "Bearer test-management-key")
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var payload struct {
+		Version string `json:"version"`
+		Routes  struct {
+			Responses bool `json:"responses"`
+		} `json:"routes"`
+		Providers map[string]struct {
+			Enabled bool `json:"enabled"`
+		} `json:"providers"`
+		AuthPool []struct {
+			ID        string `json:"id"`
+			AuthKind  string `json:"auth_kind"`
+			Execution struct {
+				Codex struct {
+					AccessToken string `json:"access_token"`
+				} `json:"codex"`
+			} `json:"execution"`
+		} `json:"auth_pool"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v body=%s", err, rr.Body.String())
+	}
+	if payload.Version == "" {
+		t.Fatal("version should not be empty")
+	}
+	if !payload.Routes.Responses {
+		t.Fatal("routes.responses = false, want true")
+	}
+	if !payload.Providers["codex"].Enabled {
+		t.Fatal("providers.codex.enabled = false, want true")
+	}
+	if len(payload.AuthPool) != 1 {
+		t.Fatalf("auth_pool len = %d, want 1", len(payload.AuthPool))
+	}
+	if payload.AuthPool[0].ID != "auth-codex-1" {
+		t.Fatalf("auth id = %q, want auth-codex-1", payload.AuthPool[0].ID)
+	}
+	if payload.AuthPool[0].AuthKind != "oauth" {
+		t.Fatalf("auth kind = %q, want oauth", payload.AuthPool[0].AuthKind)
+	}
+	if payload.AuthPool[0].Execution.Codex.AccessToken != "token-1" {
+		t.Fatalf("access token = %q, want token-1", payload.AuthPool[0].Execution.Codex.AccessToken)
 	}
 }
 
