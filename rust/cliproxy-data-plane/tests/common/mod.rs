@@ -22,6 +22,7 @@ pub fn test_runtime(responses_enabled: bool) -> RuntimeStateHandle {
         log_level: "info".to_string(),
         snapshot_file: None,
         snapshot_url: None,
+        snapshot_bearer_token: None,
         snapshot_poll_seconds: 30,
         openai_base_url: "https://api.openai.com/v1".to_string(),
         openai_api_key: None,

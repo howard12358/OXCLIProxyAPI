@@ -108,7 +108,7 @@ func BuildRuntimeSnapshot(cfg *config.Config, authManager *coreauth.Manager, now
 		GeneratedAt:      now.Format(time.RFC3339),
 		SourceInstanceID: sourceInstanceID(),
 		Listeners: ListenerConfig{
-			PublicHTTP: "",
+			PublicHTTP: strings.TrimSpace(dataPlanePublicHTTP(cfg)),
 		},
 		Routes: RouteConfig{
 			Responses:       true,
@@ -133,6 +133,13 @@ func BuildRuntimeSnapshot(cfg *config.Config, authManager *coreauth.Manager, now
 	}
 	snapshot.Version = buildSnapshotVersion(snapshot)
 	return snapshot
+}
+
+func dataPlanePublicHTTP(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.DataPlane.ResponsesBaseURL)
 }
 
 func buildCodexAuthPool(cfg *config.Config, authManager *coreauth.Manager, now time.Time) []AuthRecord {

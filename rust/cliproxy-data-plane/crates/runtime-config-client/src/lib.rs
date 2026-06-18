@@ -3,12 +3,16 @@ use std::{path::PathBuf, time::Duration};
 use anyhow::{Context, Result, bail};
 use cliproxy_common_types::snapshot::RuntimeSnapshot;
 use reqwest::Client;
+use reqwest::header::{AUTHORIZATION, HeaderValue};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SnapshotSource {
     File { path: PathBuf },
-    Http { url: String },
+    Http {
+        url: String,
+        bearer_token: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,17 +63,25 @@ impl RuntimeConfigClient {
             SnapshotSource::File { path } => tokio::fs::read_to_string(path)
                 .await
                 .with_context(|| format!("failed to read snapshot file {}", path.display()))?,
-            SnapshotSource::Http { url } => self
-                .http_client
-                .get(url)
-                .send()
-                .await
-                .with_context(|| format!("failed to request snapshot from {url}"))?
-                .error_for_status()
-                .with_context(|| format!("snapshot endpoint returned non-success for {url}"))?
-                .text()
-                .await
-                .with_context(|| format!("failed to read snapshot body from {url}"))?,
+            SnapshotSource::Http { url, bearer_token } => {
+                let mut request = self.http_client.get(url);
+                if let Some(token) = bearer_token.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty()) {
+                    request = request.header(
+                        AUTHORIZATION,
+                        HeaderValue::from_str(&format!("Bearer {token}"))
+                            .context("invalid snapshot bearer token header value")?,
+                    );
+                }
+                request
+                    .send()
+                    .await
+                    .with_context(|| format!("failed to request snapshot from {url}"))?
+                    .error_for_status()
+                    .with_context(|| format!("snapshot endpoint returned non-success for {url}"))?
+                    .text()
+                    .await
+                    .with_context(|| format!("failed to read snapshot body from {url}"))?
+            }
         };
 
         let snapshot: RuntimeSnapshot =

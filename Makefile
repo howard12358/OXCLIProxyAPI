@@ -23,6 +23,7 @@ help:
 	@printf "%s\n" \
 	"可用目标：" \
 	"  make dev-stack      启动 Go 管理平面和 Rust 数据平面" \
+	"  make dev-stack-url  启动 Go 管理平面，并让 Rust 通过网络持续拉取 snapshot" \
 	"  make stop-stack     停止 Go/Rust 联调进程" \
 	"  make restart-stack  重启 Go/Rust 联调进程" \
 	"  make status-stack   查看 Go/Rust 联调进程状态" \
@@ -56,12 +57,46 @@ dev-stack:
 	done; \
 	$(MAKE) snapshot-stack >/dev/null; \
 	echo "启动 Rust 数据平面..."; \
-	nohup env http_proxy="$${http_proxy-}" https_proxy="$${https_proxy-}" HTTP_PROXY="$${HTTP_PROXY-}" HTTPS_PROXY="$${HTTPS_PROXY-}" \
+	nohup env http_proxy="$${http_proxy-}" https_proxy="$${https_proxy-}" HTTP_PROXY="$${HTTP_PROXY-}" HTTPS_PROXY="$${HTTPS_PROXY-}" all_proxy= ALL_PROXY= \
 		cargo run --manifest-path "$(RUST_DIR)/Cargo.toml" -- --bind-addr "$(RUST_BIND_ADDR)" --snapshot-file "$(SNAPSHOT_FILE)" \
 		>"$(RUST_LOG_FILE)" 2>&1 & echo $$! >"$(RUST_PID_FILE)"; \
 	for i in $$(seq 1 30); do \
 		if curl -sf "$(RUST_READY_URL)" >/dev/null; then \
 			echo "联调栈已就绪"; \
+			echo "Go  日志: $(GO_LOG_FILE)"; \
+			echo "Rust 日志: $(RUST_LOG_FILE)"; \
+			exit 0; \
+		fi; \
+		sleep 1; \
+		if [[ $$i -eq 30 ]]; then \
+			echo "Rust 数据平面启动超时，查看日志: $(RUST_LOG_FILE)"; \
+			exit 1; \
+		fi; \
+	done
+
+dev-stack-url:
+	@set -euo pipefail; \
+	mkdir -p "$(TMP_DIR)"; \
+	$(MAKE) stop-stack >/dev/null; \
+	echo "启动 Go 管理平面..."; \
+	nohup go run ./cmd/server --config "$(GO_CONFIG)" >"$(GO_LOG_FILE)" 2>&1 & echo $$! >"$(GO_PID_FILE)"; \
+	for i in $$(seq 1 30); do \
+		if curl -sf "$(GO_HEALTH_URL)" >/dev/null; then \
+			break; \
+		fi; \
+		sleep 1; \
+		if [[ $$i -eq 30 ]]; then \
+			echo "Go 管理平面启动超时，查看日志: $(GO_LOG_FILE)"; \
+			exit 1; \
+		fi; \
+	done; \
+	echo "启动 Rust 数据平面（snapshot-url 模式）..."; \
+	nohup env http_proxy="$${http_proxy-}" https_proxy="$${https_proxy-}" HTTP_PROXY="$${HTTP_PROXY-}" HTTPS_PROXY="$${HTTPS_PROXY-}" all_proxy= ALL_PROXY= \
+		cargo run --manifest-path "$(RUST_DIR)/Cargo.toml" -- --bind-addr "$(RUST_BIND_ADDR)" --snapshot-url "$(SNAPSHOT_URL)" --snapshot-bearer-token "$(MANAGEMENT_KEY)" \
+		>"$(RUST_LOG_FILE)" 2>&1 & echo $$! >"$(RUST_PID_FILE)"; \
+	for i in $$(seq 1 30); do \
+		if curl -sf "$(RUST_READY_URL)" >/dev/null; then \
+			echo "联调栈已就绪（snapshot-url 模式）"; \
 			echo "Go  日志: $(GO_LOG_FILE)"; \
 			echo "Rust 日志: $(RUST_LOG_FILE)"; \
 			exit 0; \
@@ -92,6 +127,13 @@ stop-stack:
 			fi; \
 			rm -f $$file; \
 		fi; \
+	done; \
+	go_port="$${GO_ADDR##*:}"; \
+	rust_port="$${RUST_BIND_ADDR##*:}"; \
+	for port in "$$go_port" "$$rust_port"; do \
+		for pid in $$(lsof -tiTCP:$$port -sTCP:LISTEN 2>/dev/null || true); do \
+			kill $$pid 2>/dev/null || true; \
+		done; \
 	done
 
 restart-stack:

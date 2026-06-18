@@ -1,9 +1,11 @@
 use std::fs;
 
+use axum::{Router, http::StatusCode, response::IntoResponse, routing::get};
 use cliproxy_runtime_config_client::{
     RuntimeConfigClient, RuntimeConfigClientConfig, SnapshotSource,
 };
 use tempfile::tempdir;
+use tokio::net::TcpListener;
 
 fn valid_snapshot_json() -> &'static str {
     r#"{
@@ -98,4 +100,34 @@ async fn fetch_snapshot_rejects_codex_oauth_without_execution_access_token() {
         .await
         .expect_err("expected invalid snapshot");
     assert!(err.to_string().contains("execution.codex.access_token"));
+}
+
+#[tokio::test]
+async fn fetch_snapshot_from_http_uses_bearer_token() {
+    async fn snapshot_endpoint(headers: axum::http::HeaderMap) -> impl IntoResponse {
+        let auth = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if auth != "Bearer test-management-key" {
+            return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+        }
+        (StatusCode::OK, valid_snapshot_json()).into_response()
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind snapshot listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let app = Router::new().route("/snapshot", get(snapshot_endpoint));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve snapshot");
+    });
+
+    let client = RuntimeConfigClient::new(RuntimeConfigClientConfig::new(SnapshotSource::Http {
+        url: format!("http://{addr}/snapshot"),
+        bearer_token: Some("test-management-key".to_string()),
+    }));
+    let snapshot = client.fetch_snapshot().await.expect("fetch snapshot");
+    assert_eq!(snapshot.version, "v1");
 }

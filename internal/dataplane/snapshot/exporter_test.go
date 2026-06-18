@@ -12,6 +12,9 @@ import (
 func TestBuildRuntimeSnapshotExportsCodexOAuthAuth(t *testing.T) {
 	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
 	cfg := &config.Config{
+		DataPlane: config.DataPlaneConfig{
+			ResponsesBaseURL: "http://127.0.0.1:4100",
+		},
 		Routing: config.RoutingConfig{
 			Strategy:           "fill-first",
 			SessionAffinity:    true,
@@ -49,6 +52,9 @@ func TestBuildRuntimeSnapshotExportsCodexOAuthAuth(t *testing.T) {
 	snapshot := BuildRuntimeSnapshot(cfg, manager, now)
 	if snapshot.Routes.Responses != true {
 		t.Fatalf("routes.responses = %v, want true", snapshot.Routes.Responses)
+	}
+	if snapshot.Listeners.PublicHTTP != "http://127.0.0.1:4100" {
+		t.Fatalf("listeners.public_http = %q, want http://127.0.0.1:4100", snapshot.Listeners.PublicHTTP)
 	}
 	if snapshot.Routing.Strategy != "fill-first" {
 		t.Fatalf("routing.strategy = %q, want fill-first", snapshot.Routing.Strategy)
