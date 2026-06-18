@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,38 @@ import (
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	return newTestServerWithOptions(t)
+}
+
+func newTestServerWithConfig(t *testing.T, mutate func(*proxyconfig.Config)) *Server {
+	t.Helper()
+
+	gin.SetMode(gin.TestMode)
+
+	tmpDir := t.TempDir()
+	authDir := filepath.Join(tmpDir, "auth")
+	if err := os.MkdirAll(authDir, 0o700); err != nil {
+		t.Fatalf("failed to create auth dir: %v", err)
+	}
+
+	cfg := &proxyconfig.Config{
+		SDKConfig: sdkconfig.SDKConfig{
+			APIKeys: []string{"test-key"},
+		},
+		Port:                   0,
+		AuthDir:                authDir,
+		Debug:                  true,
+		LoggingToFile:          false,
+		UsageStatisticsEnabled: false,
+	}
+	if mutate != nil {
+		mutate(cfg)
+	}
+
+	authManager := auth.NewManager(nil, nil, nil)
+	accessManager := sdkaccess.NewManager()
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	return NewServer(cfg, authManager, accessManager, configPath)
 }
 
 func newTestServerWithOptions(t *testing.T, opts ...ServerOption) *Server {
@@ -265,6 +298,99 @@ func TestManagementPluginsRouteRegistered(t *testing.T) {
 	server.engine.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("delete status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+}
+
+func TestResponsesRouteProxiesToDataPlaneWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	var gotPath string
+	var gotAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"response","status":"completed","source":"rust"}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	server := newTestServerWithConfig(t, func(cfg *proxyconfig.Config) {
+		cfg.DataPlane.ResponsesBaseURL = upstream.URL
+	})
+	httpServer := httptest.NewServer(server.engine)
+	t.Cleanup(httpServer.Close)
+
+	req, errReq := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"hello"}`))
+	if errReq != nil {
+		t.Fatalf("new request: %v", errReq)
+	}
+	req.Header.Set("Authorization", "Bearer test-key")
+	req.Header.Set("Content-Type", "application/json")
+	resp, errDo := http.DefaultClient.Do(req)
+	if errDo != nil {
+		t.Fatalf("do request: %v", errDo)
+	}
+	defer resp.Body.Close()
+	body, errRead := io.ReadAll(resp.Body)
+	if errRead != nil {
+		t.Fatalf("read body: %v", errRead)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", resp.StatusCode, http.StatusOK, string(body))
+	}
+	if gotPath != "/v1/responses" {
+		t.Fatalf("upstream path = %q, want %q", gotPath, "/v1/responses")
+	}
+	if gotAuth != "Bearer test-key" {
+		t.Fatalf("auth header = %q, want %q", gotAuth, "Bearer test-key")
+	}
+	if !strings.Contains(string(body), `"source":"rust"`) {
+		t.Fatalf("body = %s, want proxied response", string(body))
+	}
+}
+
+func TestCodexDirectResponsesRouteProxiesToDataPlaneWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"response","status":"completed","source":"rust-codex"}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	server := newTestServerWithConfig(t, func(cfg *proxyconfig.Config) {
+		cfg.DataPlane.ResponsesBaseURL = upstream.URL
+	})
+	httpServer := httptest.NewServer(server.engine)
+	t.Cleanup(httpServer.Close)
+
+	req, errReq := http.NewRequest(http.MethodPost, httpServer.URL+"/backend-api/codex/responses", strings.NewReader(`{"model":"gpt-5.5","input":"hello"}`))
+	if errReq != nil {
+		t.Fatalf("new request: %v", errReq)
+	}
+	req.Header.Set("Authorization", "Bearer test-key")
+	req.Header.Set("Content-Type", "application/json")
+	resp, errDo := http.DefaultClient.Do(req)
+	if errDo != nil {
+		t.Fatalf("do request: %v", errDo)
+	}
+	defer resp.Body.Close()
+	body, errRead := io.ReadAll(resp.Body)
+	if errRead != nil {
+		t.Fatalf("read body: %v", errRead)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", resp.StatusCode, http.StatusOK, string(body))
+	}
+	if gotPath != "/v1/responses" {
+		t.Fatalf("upstream path = %q, want %q", gotPath, "/v1/responses")
+	}
+	if !strings.Contains(string(body), `"source":"rust-codex"`) {
+		t.Fatalf("body = %s, want proxied response", string(body))
 	}
 }
 

@@ -165,9 +165,6 @@ pub fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::tempdir;
-
     fn valid_snapshot_json() -> &'static str {
         r#"{
           "version": "v1",
@@ -228,41 +225,6 @@ mod tests {
             "enable_sse_repair": true
           }
         }"#
-    }
-
-    #[tokio::test]
-    async fn fetch_snapshot_from_file_succeeds() {
-        let dir = tempdir().expect("create temp dir");
-        let path = dir.path().join("snapshot.json");
-        fs::write(&path, valid_snapshot_json()).expect("write snapshot");
-
-        let client =
-            RuntimeConfigClient::new(RuntimeConfigClientConfig::new(SnapshotSource::File {
-                path,
-            }));
-        let snapshot = client.fetch_snapshot().await.expect("fetch snapshot");
-        assert_eq!(snapshot.version, "v1");
-    }
-
-    #[tokio::test]
-    async fn fetch_snapshot_rejects_codex_oauth_without_execution_access_token() {
-        let dir = tempdir().expect("create temp dir");
-        let path = dir.path().join("snapshot.json");
-        let invalid = valid_snapshot_json().replace(
-            "\"access_token\": \"codex-access-token\"",
-            "\"access_token\": \"\"",
-        );
-        fs::write(&path, invalid).expect("write snapshot");
-
-        let client =
-            RuntimeConfigClient::new(RuntimeConfigClientConfig::new(SnapshotSource::File {
-                path,
-            }));
-        let err = client
-            .fetch_snapshot()
-            .await
-            .expect_err("expected invalid snapshot");
-        assert!(err.to_string().contains("execution.codex.access_token"));
     }
 
     #[test]

@@ -424,6 +424,10 @@ func (s *Server) setupRoutes() {
 	geminiCLIHandlers := gemini.NewGeminiCLIAPIHandler(s.handlers)
 	claudeCodeHandlers := claude.NewClaudeCodeAPIHandler(s.handlers)
 	openaiResponsesHandlers := openai.NewOpenAIResponsesAPIHandler(s.handlers)
+	responsesPostHandler := gin.HandlerFunc(openaiResponsesHandlers.Responses)
+	if proxyHandler := makeDataPlaneResponsesProxy(s.cfg.DataPlane.ResponsesBaseURL); proxyHandler != nil {
+		responsesPostHandler = proxyHandler
+	}
 
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
@@ -442,7 +446,7 @@ func (s *Server) setupRoutes() {
 		v1.POST("/messages", claudeCodeHandlers.ClaudeMessages)
 		v1.POST("/messages/count_tokens", claudeCodeHandlers.ClaudeCountTokens)
 		v1.GET("/responses", openaiResponsesHandlers.ResponsesWebsocket)
-		v1.POST("/responses", openaiResponsesHandlers.Responses)
+		v1.POST("/responses", responsesPostHandler)
 		v1.POST("/responses/compact", openaiResponsesHandlers.Compact)
 	}
 
@@ -459,7 +463,7 @@ func (s *Server) setupRoutes() {
 	codexDirect.Use(AuthMiddleware(s.accessManager))
 	{
 		codexDirect.GET("/responses", openaiResponsesHandlers.ResponsesWebsocket)
-		codexDirect.POST("/responses", openaiResponsesHandlers.Responses)
+		codexDirect.POST("/responses", responsesPostHandler)
 		codexDirect.POST("/responses/compact", openaiResponsesHandlers.Compact)
 	}
 

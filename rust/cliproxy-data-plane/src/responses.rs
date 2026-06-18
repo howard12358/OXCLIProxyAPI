@@ -108,7 +108,14 @@ pub async fn handle_responses(
     let selected_auth = auth_for_plan(snapshot.as_ref(), &execution_plan);
 
     if upstream_enabled_for_request(&upstream, selected_auth) {
-        return match execute_real_upstream(upstream, request, &execution_plan, selected_auth).await
+        return match execute_real_upstream(
+            upstream,
+            request,
+            snapshot.as_ref(),
+            &execution_plan,
+            selected_auth,
+        )
+        .await
         {
             Ok(response) => response,
             Err(err) => error_response(StatusCode::BAD_GATEWAY, &err.to_string(), "upstream_error"),
@@ -157,7 +164,10 @@ fn auth_for_plan<'a>(
         .find(|auth| auth.id == plan.auth_id)
 }
 
-fn upstream_enabled_for_request(upstream: &UpstreamRuntime, selected_auth: Option<&AuthRecord>) -> bool {
+fn upstream_enabled_for_request(
+    upstream: &UpstreamRuntime,
+    selected_auth: Option<&AuthRecord>,
+) -> bool {
     upstream.is_enabled()
         || selected_auth
             .map(|auth| upstream.can_execute_for_auth(auth))
@@ -167,11 +177,19 @@ fn upstream_enabled_for_request(upstream: &UpstreamRuntime, selected_auth: Optio
 async fn execute_real_upstream(
     upstream: UpstreamRuntime,
     request: ResponsesRequest,
+    snapshot: &RuntimeSnapshot,
     execution_plan: &ExecutionPlan,
     selected_auth: Option<&AuthRecord>,
 ) -> Result<Response<Body>> {
+    let downstream_stream = request.stream;
+    let aggregate_codex_stream = execution_plan.provider
+        == cliproxy_common_types::upstream::ProviderKind::Codex
+        && !downstream_stream;
     let mut upstream_request = normalize_upstream_request(request, execution_plan);
     upstream_request.model = execution_plan.model.clone();
+    if aggregate_codex_stream {
+        upstream_request.stream = true;
+    }
     let request_body =
         serde_json::to_vec(&upstream_request).context("failed to serialize responses request")?;
     info!(
@@ -181,36 +199,19 @@ async fn execute_real_upstream(
         stickiness_source = ?execution_plan.stickiness_source,
         "responses execution plan selected"
     );
-    let upstream_result = if let Some(auth) = selected_auth {
-        if upstream.can_execute_for_auth(auth) {
-            upstream
-                .execute_responses_for_auth(
-                    auth,
-                    UpstreamRequest {
-                        model: upstream_request.model.clone(),
-                        body: request_body,
-                        stream: upstream_request.stream,
-                    },
-                )
-                .await?
-        } else {
-            upstream
-                .execute_responses(UpstreamRequest {
-                    model: upstream_request.model.clone(),
-                    body: request_body,
-                    stream: upstream_request.stream,
-                })
-                .await?
-        }
-    } else {
-        upstream
-            .execute_responses(UpstreamRequest {
-                model: upstream_request.model.clone(),
-                body: request_body,
-                stream: upstream_request.stream,
-            })
-            .await?
+    let upstream_request_template = UpstreamRequest {
+        model: upstream_request.model.clone(),
+        body: request_body,
+        stream: upstream_request.stream,
     };
+    let upstream_result = execute_upstream_with_retries(
+        &upstream,
+        snapshot,
+        execution_plan,
+        selected_auth,
+        &upstream_request_template,
+    )
+    .await?;
 
     match upstream_result {
         UpstreamExecutionResult::NonStreaming(response) => {
@@ -219,6 +220,13 @@ async fn execute_real_upstream(
             Ok(response_from_body(response.head, response.body))
         }
         UpstreamExecutionResult::Streaming(response) => {
+            if aggregate_codex_stream {
+                let _provider = response.provider;
+                let _events = response.events;
+                let body = aggregate_streaming_response_body(response.first_chunk, response.stream)
+                    .await?;
+                return Ok(response_from_body(response.head, body));
+            }
             let _provider = response.provider;
             let _events = response.events;
             let first_chunk = response.first_chunk;
@@ -243,6 +251,67 @@ async fn execute_real_upstream(
             Ok(response_with_stream(response.head, body))
         }
     }
+}
+
+async fn execute_upstream_with_retries(
+    upstream: &UpstreamRuntime,
+    snapshot: &RuntimeSnapshot,
+    execution_plan: &ExecutionPlan,
+    selected_auth: Option<&AuthRecord>,
+    request: &UpstreamRequest,
+) -> Result<UpstreamExecutionResult> {
+    if let Some(auth) = selected_auth {
+        if upstream.can_execute_for_auth(auth) {
+            let mut last_error = None;
+            for candidate in auth_retry_chain(snapshot, execution_plan, auth) {
+                match upstream
+                    .execute_responses_for_auth(&candidate, request.clone())
+                    .await
+                {
+                    Ok(response) => return Ok(response),
+                    Err(err) if should_retry_auth_bound_error(&err) => {
+                        info!(
+                            failed_auth_id = %candidate.id,
+                            next_retry_candidates = ?execution_plan.retry_candidates,
+                            reason = %err,
+                            "responses upstream auth failed, retrying next candidate"
+                        );
+                        last_error = Some(err);
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+            if let Some(err) = last_error {
+                return Err(err);
+            }
+        } else {
+            return upstream.execute_responses(request.clone()).await;
+        }
+    }
+
+    upstream.execute_responses(request.clone()).await
+}
+
+fn auth_retry_chain(
+    snapshot: &RuntimeSnapshot,
+    execution_plan: &ExecutionPlan,
+    selected_auth: &AuthRecord,
+) -> Vec<AuthRecord> {
+    let mut chain = vec![selected_auth.clone()];
+    for auth_id in &execution_plan.retry_candidates {
+        if let Some(auth) = snapshot.auth_pool.iter().find(|auth| auth.id == *auth_id) {
+            chain.push(auth.clone());
+        }
+    }
+    chain
+}
+
+fn should_retry_auth_bound_error(err: &anyhow::Error) -> bool {
+    let message = err.to_string().to_ascii_lowercase();
+    message.contains("upstream codex error 401")
+        || message.contains("upstream codex error 403")
+        || message.contains("account_deactivated")
+        || message.contains("invalid_api_key")
 }
 
 fn normalize_upstream_request(
@@ -281,6 +350,83 @@ fn normalize_upstream_request(
     }
 
     request
+}
+
+async fn aggregate_streaming_response_body(
+    first_chunk: Bytes,
+    mut tail: cliproxy_upstream_runtime::ByteStream,
+) -> Result<Bytes> {
+    let mut combined = Vec::from(first_chunk.as_ref());
+    while let Some(item) = tail.next().await {
+        let bytes = item?;
+        combined.extend_from_slice(&bytes);
+    }
+    extract_completed_response_from_sse(&combined)
+}
+
+fn extract_completed_response_from_sse(bytes: &[u8]) -> Result<Bytes> {
+    for frame in sse_frames(bytes) {
+        let Some(payload) = sse_data_payload(frame) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_slice::<Value>(&payload) else {
+            continue;
+        };
+        if value
+            .get("type")
+            .and_then(Value::as_str)
+            .map(|value| value == "response.completed")
+            .unwrap_or(false)
+        {
+            let response = value
+                .get("response")
+                .ok_or_else(|| anyhow!("response.completed event missing response payload"))?;
+            return serde_json::to_vec(response)
+                .map(Bytes::from)
+                .context("failed to serialize aggregated response body");
+        }
+    }
+    bail!("upstream stream did not produce response.completed")
+}
+
+fn sse_frames(bytes: &[u8]) -> Vec<&[u8]> {
+    let mut frames = Vec::new();
+    let mut start = 0usize;
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        if bytes[index..].starts_with(b"\r\n\r\n") {
+            frames.push(&bytes[start..index]);
+            index += 4;
+            start = index;
+            continue;
+        }
+        if bytes[index..].starts_with(b"\n\n") {
+            frames.push(&bytes[start..index]);
+            index += 2;
+            start = index;
+            continue;
+        }
+        index += 1;
+    }
+
+    if start < bytes.len() {
+        frames.push(&bytes[start..]);
+    }
+
+    frames
+}
+
+fn sse_data_payload(frame: &[u8]) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(frame).ok()?;
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(data) = trimmed.strip_prefix("data:") {
+            lines.push(data.trim_start().to_string());
+        }
+    }
+    (!lines.is_empty()).then(|| lines.join("\n").into_bytes())
 }
 
 fn non_streaming_response(
@@ -661,17 +807,20 @@ mod tests {
             normalized.instructions.as_deref(),
             Some(DEFAULT_CODEX_INSTRUCTIONS)
         );
-        assert_eq!(normalized.input, Some(json!([
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": "hello from codex"
-                    }
-                ]
-            }
-        ])));
+        assert_eq!(
+            normalized.input,
+            Some(json!([
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "hello from codex"
+                        }
+                    ]
+                }
+            ]))
+        );
     }
 
     #[test]
@@ -697,5 +846,23 @@ mod tests {
         assert_eq!(normalized.input, request.input);
         assert_eq!(normalized.instructions, request.instructions);
         assert_eq!(normalized.store, request.store);
+    }
+
+    #[test]
+    fn extract_completed_response_from_sse_returns_response_payload() {
+        let bytes = concat!(
+            "event: response.created\n",
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\"}}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"object\":\"response\",\"status\":\"completed\"}}\n\n"
+        )
+        .as_bytes()
+        .to_vec();
+
+        let aggregated = extract_completed_response_from_sse(&bytes).expect("aggregate sse");
+        let payload: Value = serde_json::from_slice(&aggregated).expect("parse aggregated body");
+        assert_eq!(payload["id"], "resp-1");
+        assert_eq!(payload["object"], "response");
+        assert_eq!(payload["status"], "completed");
     }
 }

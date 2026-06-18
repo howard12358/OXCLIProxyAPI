@@ -28,21 +28,26 @@
 - `【已联通】` 表示两端都已经接通
 - `【仅设计】` 表示当前还停留在设计层
 
+文档更新时间：
+
+- 2026-06-17：已同步到“Go snapshot 导出已实现、Rust `/v1/responses` 可真实执行、Go 可选 sidecar 转发已实现”的状态
+
 ## 3. 通信矩阵
 
 | 方向 | 发起方 | 接收方 | 内容 | 建议协议 | 是否热路径 | 当前状态 |
 |---|---|---|---|---|---|---|
-| 配置下发 | Rust 拉取 | Go CPA | `runtime snapshot` 全量快照 | 本地 loopback HTTP | 否 | `【当前交互点】` Rust 已支持文件 / HTTP 拉取与原子应用，Go 正式导出接口未实现 |
-| 快照刷新 | Rust 定时拉取 | Go CPA | 最新 `version` 对应的运行时配置 | 本地 loopback HTTP | 否 | `【当前交互点】` Rust 已支持轮询、版本比较、`degraded` 降级，Go 正式接口未实现 |
-| 首次启动校验 | Rust | Go CPA | 首次 snapshot 获取 | 本地 loopback HTTP | 否 | `【当前交互点】` Rust 已支持 fail closed 行为，Go 正式接口未实现 |
+| 配置下发 | Rust 拉取 | Go CPA | `runtime snapshot` 全量快照 | 本地 loopback HTTP | 否 | `【已联通】` Go 已提供 `/v0/management/runtime-snapshot`，Rust 已支持文件 / HTTP 拉取与原子应用 |
+| 快照刷新 | Rust 定时拉取 | Go CPA | 最新 `version` 对应的运行时配置 | 本地 loopback HTTP | 否 | `【已联通】` Rust 已支持轮询、版本比较、`degraded` 降级；Go 已能稳定导出 snapshot |
+| 首次启动校验 | Rust | Go CPA | 首次 snapshot 获取 | 本地 loopback HTTP | 否 | `【已联通】` Rust 已支持 fail closed，Go 已提供正式 snapshot 接口 |
 | 流量接入 | Client | Rust Data Plane | 当前聚焦 `/v1/responses`，后续再扩 `/v1/chat/completions` 等请求 | HTTP / SSE | 是 | Rust 已实现 `/v1/responses` ingress，并已接入 router-core 选路 |
-| 上游执行 | Rust Data Plane | Provider | OpenAI / Codex / Claude / Gemini 请求 | HTTP / WebSocket / SSE | 是 | Rust 已实现 OpenAI / Codex 的 `/responses` HTTP upstream v1，Claude / Gemini / WebSocket relay 仍未实现 |
+| 上游执行 | Rust Data Plane | Provider | OpenAI / Codex / Claude / Gemini 请求 | HTTP / WebSocket / SSE | 是 | Rust 已实现 OpenAI / Codex 的 `/responses` HTTP upstream v1，并已打通 Codex OAuth 真实执行；Claude / Gemini / WebSocket relay 仍未实现 |
 | usage 输出 | Rust Data Plane | Go CPA 或队列系统 | usage 事件 | queue / HTTP / 本地接口 | 否 | `【仅设计】` Rust 当前仅保留响应中的 usage 语义，正式 usage event 输出未实现 |
 | 健康信号回传 | Rust Data Plane | Go CPA | `ready / degraded / failed`、错误摘要 | 管理接口 / 指标抓取 | 否 | `【当前交互点】` Rust 本地已有状态与 `/healthz`、`/readyz`，Go 未接入 |
 | auth 健康回传 | Rust Data Plane | Go CPA | auth unhealthy、cooldown 建议 | 管理接口 / 事件流 | 否 | `【仅设计】` 尚未实现 |
 | 指标采集 | 监控系统或 Go | Rust Data Plane | 请求数、首字节延迟、流时长等指标 | HTTP metrics endpoint | 否 | `【仅设计】` 尚未实现 |
 | 管理写操作 | Operator / Go 管理面 | Go CPA | 配置修改、auth 管理、OAuth 生命周期控制 | Go 内部管理 API | 否 | 已在 Go 侧存在 |
 | 热路径绕过 | Rust Data Plane | Client / Provider | 请求与响应主链路 | 直接连接 | 是 | 已形成 `/v1/responses -> Rust -> OpenAI/Codex upstream` 的基础闭环 |
+| 入口切流 | Go CPA | Rust Data Plane | 把 `/v1/responses` 请求转发给 sidecar | 本地 HTTP reverse proxy | 是 | `【已联通】` Go 已支持通过 `data-plane.responses-base-url` 可选转发 `/v1/responses` 与 `/backend-api/codex/responses` |
 
 ## 4. 当前已标出的 CPA 交互点
 
@@ -71,7 +76,16 @@
    - 当前可见接口：
      - `/healthz`
      - `/readyz`
-还没有进入“当前交互点”的内容：
+
+5. Go 入口切流
+   - Go 已可选把 `/v1/responses` 转发到 Rust sidecar
+   - 当前代码入口：
+     - `internal/api/dataplane_proxy.go`
+     - `internal/api/server.go`
+   - 当前配置项：
+     - `data-plane.responses-base-url`
+
+还没有进入“当前交互点”或“已联通”的内容：
 
 - usage 回传
 - auth unhealthy / cooldown 回传
@@ -155,6 +169,13 @@
 - retry candidates 产出
 - 按 `ExecutionPlan.auth_id` 驱动 Codex OAuth `/responses` 上游执行
 - `/v1/responses` 热路径接入 router-core 选路
+- Codex 上游最小 payload 适配：
+  - `store: false`
+  - 缺省 `instructions`
+  - 字符串 `input` 转 message 结构
+  - 去掉 `metadata`
+- 对 Codex 上游的 `stream=false -> stream=true -> 聚合回非流式 JSON`
+- 可重试 Codex auth 失败后的自动切换执行
 
 ### 7.2 Rust 未实现
 
@@ -166,22 +187,31 @@
 - WebSocket relay 型 upstream runtime
 - `/v1/chat/completions`、`/v1/messages` ingress
 
-### 7.3 Go 未实现
+### 7.3 Go 已实现 / 未实现
+
+Go 已实现：
 
 - 正式的 runtime snapshot 导出接口
+- 可选的 Rust sidecar `/v1/responses` 转发入口
+
+Go 未实现：
+
 - 消费 Rust usage / 健康 / auth 信号的接口
-- 真实流量切到 Rust 数据平面的入口
+- 默认生产路径切流策略与回退编排
 
 ### 7.4 当前里程碑对应关系
 
 - 里程碑 0：已完成
 - 里程碑 1：已完成
 - 里程碑 2：已完成
-- 里程碑 3：基础完成
+- 里程碑 3：已完成首版可用闭环
 - 里程碑 4：已完成收敛版本
   - 范围限定为 Codex 下游只服务 `/v1/responses`
   - 已完成选路决策与热路径接入
   - 已完成按 `auth_id` 的 Codex OAuth 执行绑定
+- 里程碑 5：已完成 MVP 所需最小子集
+- 里程碑 6：已完成 MVP 所需最小子集
+- Go 侧已完成可选 sidecar 转发接入
 
 ## 8. 建议的最小落地顺序
 
@@ -190,8 +220,9 @@
 1. Go 导出 runtime snapshot
 2. Rust 从 Go 拉真实 snapshot
 3. Rust 用真实 snapshot 驱动 `/v1/responses`
-4. Rust 向外暴露可供观测的健康和指标
-5. 再逐步增加 usage / auth 健康 / cooldown 回传
+4. Go 在显式配置下把 `/v1/responses` 切到 Rust sidecar
+5. Rust 向外暴露可供观测的健康和指标
+6. 再逐步增加 usage / auth 健康 / cooldown 回传
 
 ## 9. 结论
 

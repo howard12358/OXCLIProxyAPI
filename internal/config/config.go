@@ -156,6 +156,9 @@ type Config struct {
 
 	// Payload defines default and override rules for provider payload parameters.
 	Payload PayloadConfig `yaml:"payload" json:"payload"`
+
+	// DataPlane configures optional Rust data plane integration.
+	DataPlane DataPlaneConfig `yaml:"data-plane" json:"data-plane"`
 }
 
 // PluginsConfig holds dynamic plugin system settings.
@@ -395,6 +398,12 @@ type PayloadModelRule struct {
 	Exist []string `yaml:"exist" json:"exist"`
 	// NotExist requires payload JSON paths to be missing or null.
 	NotExist []string `yaml:"not-exist" json:"not-exist"`
+}
+
+// DataPlaneConfig configures optional Rust data plane routing.
+type DataPlaneConfig struct {
+	// ResponsesBaseURL routes POST /v1/responses traffic to the Rust sidecar when set.
+	ResponsesBaseURL string `yaml:"responses-base-url" json:"responses-base-url"`
 }
 
 // CloakConfig configures request cloaking for non-Claude-Code clients.
