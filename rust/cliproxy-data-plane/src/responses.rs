@@ -18,7 +18,7 @@ use cliproxy_upstream_runtime::{UpstreamExecutionResult, UpstreamRequest, Upstre
 use futures_util::{StreamExt, stream::Stream};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tracing::info;
+use tracing::{debug, info, warn};
 
 use crate::runtime::RuntimeStateHandle;
 
@@ -118,7 +118,10 @@ pub async fn handle_responses(
         .await
         {
             Ok(response) => response,
-            Err(err) => error_response(StatusCode::BAD_GATEWAY, &err.to_string(), "upstream_error"),
+            Err(err) => {
+                log_upstream_failure(&err, &execution_plan);
+                error_response(StatusCode::BAD_GATEWAY, &err.to_string(), "upstream_error")
+            }
         };
     }
 
@@ -225,7 +228,7 @@ async fn execute_real_upstream(
                 let _events = response.events;
                 let body = aggregate_streaming_response_body(response.first_chunk, response.stream)
                     .await?;
-                return Ok(response_from_body(response.head, body));
+                return Ok(response_from_aggregated_json_body(response.head, body));
             }
             let _provider = response.provider;
             let _events = response.events;
@@ -312,6 +315,32 @@ fn should_retry_auth_bound_error(err: &anyhow::Error) -> bool {
         || message.contains("upstream codex error 403")
         || message.contains("account_deactivated")
         || message.contains("invalid_api_key")
+}
+
+fn log_upstream_failure(err: &anyhow::Error, execution_plan: &ExecutionPlan) {
+    warn!(
+        provider = ?execution_plan.provider,
+        auth_id = %execution_plan.auth_id,
+        resolved_model = %execution_plan.model,
+        stickiness_source = ?execution_plan.stickiness_source,
+        error = %err,
+        "responses upstream execution failed"
+    );
+
+    let chain = err
+        .chain()
+        .enumerate()
+        .map(|(index, cause)| format!("{index}: {cause}"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+
+    debug!(
+        provider = ?execution_plan.provider,
+        auth_id = %execution_plan.auth_id,
+        resolved_model = %execution_plan.model,
+        error_chain = %chain,
+        "responses upstream failure chain"
+    );
 }
 
 fn normalize_upstream_request(
@@ -723,7 +752,21 @@ fn response_from_body(
 ) -> Response<Body> {
     let mut response = Response::new(Body::from(body));
     *response.status_mut() = StatusCode::from_u16(head.status).unwrap_or(StatusCode::OK);
-    apply_upstream_headers(response.headers_mut(), &head.headers);
+    apply_upstream_headers(response.headers_mut(), &head.headers, false);
+    response
+}
+
+fn response_from_aggregated_json_body(
+    head: cliproxy_common_types::upstream::UpstreamResponseHead,
+    body: Bytes,
+) -> Response<Body> {
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() = StatusCode::from_u16(head.status).unwrap_or(StatusCode::OK);
+    apply_upstream_headers(response.headers_mut(), &head.headers, true);
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
     response
 }
 
@@ -733,15 +776,19 @@ fn response_with_stream(
 ) -> Response<Body> {
     let mut response = Response::new(body);
     *response.status_mut() = StatusCode::from_u16(head.status).unwrap_or(StatusCode::OK);
-    apply_upstream_headers(response.headers_mut(), &head.headers);
+    apply_upstream_headers(response.headers_mut(), &head.headers, false);
     response
 }
 
 fn apply_upstream_headers(
     headers: &mut axum::http::HeaderMap,
     source: &std::collections::BTreeMap<String, String>,
+    body_rewritten: bool,
 ) {
     for (key, value) in source {
+        if should_skip_upstream_header(key, body_rewritten) {
+            continue;
+        }
         if let (Ok(name), Ok(value)) = (
             axum::http::header::HeaderName::from_bytes(key.as_bytes()),
             HeaderValue::from_str(value),
@@ -749,6 +796,30 @@ fn apply_upstream_headers(
             headers.insert(name, value);
         }
     }
+}
+
+fn should_skip_upstream_header(name: &str, body_rewritten: bool) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    if matches!(
+        normalized.as_str(),
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "proxy-connection"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    ) {
+        return true;
+    }
+
+    body_rewritten
+        && matches!(
+            normalized.as_str(),
+            "content-length" | "content-encoding" | "content-range"
+        )
 }
 
 #[cfg(test)]
@@ -864,5 +935,53 @@ mod tests {
         assert_eq!(payload["id"], "resp-1");
         assert_eq!(payload["object"], "response");
         assert_eq!(payload["status"], "completed");
+    }
+
+    #[test]
+    fn apply_upstream_headers_strips_hop_by_hop_headers() {
+        let mut headers = axum::http::HeaderMap::new();
+        let source = std::collections::BTreeMap::from([
+            ("content-type".to_string(), "application/json".to_string()),
+            ("connection".to_string(), "keep-alive".to_string()),
+            ("keep-alive".to_string(), "timeout=4".to_string()),
+            ("proxy-connection".to_string(), "keep-alive".to_string()),
+            ("transfer-encoding".to_string(), "chunked".to_string()),
+        ]);
+
+        apply_upstream_headers(&mut headers, &source, false);
+
+        assert_eq!(
+            headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        assert!(headers.get(header::CONNECTION).is_none());
+        assert!(headers.get("keep-alive").is_none());
+        assert!(headers.get("proxy-connection").is_none());
+        assert!(headers.get(header::TRANSFER_ENCODING).is_none());
+    }
+
+    #[test]
+    fn apply_upstream_headers_drops_entity_headers_when_body_is_rewritten() {
+        let mut headers = axum::http::HeaderMap::new();
+        let source = std::collections::BTreeMap::from([
+            ("content-length".to_string(), "999".to_string()),
+            ("content-encoding".to_string(), "gzip".to_string()),
+            ("content-range".to_string(), "bytes 0-10/10".to_string()),
+            ("x-request-id".to_string(), "req_123".to_string()),
+        ]);
+
+        apply_upstream_headers(&mut headers, &source, true);
+
+        assert!(headers.get(header::CONTENT_LENGTH).is_none());
+        assert!(headers.get(header::CONTENT_ENCODING).is_none());
+        assert!(headers.get(header::CONTENT_RANGE).is_none());
+        assert_eq!(
+            headers
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("req_123")
+        );
     }
 }

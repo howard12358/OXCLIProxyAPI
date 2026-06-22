@@ -11,7 +11,13 @@ use crate::runtime::RuntimeStateHandle;
 pub async fn run(config: Config) -> Result<()> {
     let runtime_state = RuntimeStateHandle::new(&config);
     let snapshot_client = RuntimeConfigClient::new(config.snapshot_client_config()?);
-    let upstream_runtime = UpstreamRuntime::new(config.upstream_runtime_config());
+    let upstream_config = config.upstream_runtime_config();
+    info!(
+        upstream_http_proxy = upstream_config.http_proxy.as_deref().unwrap_or(""),
+        upstream_https_proxy = upstream_config.https_proxy.as_deref().unwrap_or(""),
+        "upstream proxy config loaded"
+    );
+    let upstream_runtime = UpstreamRuntime::new(upstream_config);
     if let Err(err) = runtime_state.initial_load(&snapshot_client).await {
         runtime_state.mark_failed(err.to_string());
         return Err(err);

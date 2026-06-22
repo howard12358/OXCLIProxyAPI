@@ -36,6 +36,8 @@ pub struct CodexConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct UpstreamRuntimeConfig {
+    pub http_proxy: Option<String>,
+    pub https_proxy: Option<String>,
     pub openai: Option<OpenAiConfig>,
     pub codex: Option<CodexConfig>,
 }
@@ -71,9 +73,10 @@ pub struct UpstreamStreamResponse {
 
 impl UpstreamRuntime {
     pub fn new(config: UpstreamRuntimeConfig) -> Self {
+        let client = build_client(&config).expect("failed to build upstream http client");
         Self {
             config: Arc::new(config),
-            client: Client::new(),
+            client,
         }
     }
 
@@ -324,6 +327,26 @@ impl UpstreamRuntime {
     }
 }
 
+fn build_client(config: &UpstreamRuntimeConfig) -> Result<Client> {
+    let mut builder = Client::builder();
+
+    if let Some(proxy_url) = config.http_proxy.as_deref() {
+        builder = builder.proxy(
+            reqwest::Proxy::http(proxy_url)
+                .with_context(|| format!("invalid upstream http proxy: {proxy_url}"))?,
+        );
+    }
+
+    if let Some(proxy_url) = config.https_proxy.as_deref() {
+        builder = builder.proxy(
+            reqwest::Proxy::https(proxy_url)
+                .with_context(|| format!("invalid upstream https proxy: {proxy_url}"))?,
+        );
+    }
+
+    builder.build().context("failed to build upstream reqwest client")
+}
+
 pub enum UpstreamExecutionResult {
     NonStreaming(UpstreamResponse),
     Streaming(UpstreamStreamResponse),
@@ -430,6 +453,8 @@ mod tests {
     #[test]
     fn provider_for_model_prefers_codex_when_model_contains_codex() {
         let runtime = UpstreamRuntime::new(UpstreamRuntimeConfig {
+            http_proxy: None,
+            https_proxy: None,
             openai: Some(OpenAiConfig {
                 base_url: "https://api.openai.com/v1".to_string(),
                 api_key: "openai-key".to_string(),

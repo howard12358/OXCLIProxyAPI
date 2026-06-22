@@ -442,6 +442,13 @@ async fn responses_route_aggregates_codex_stream_for_non_stream_clients() {
         .expect("call app");
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
     let body = response
         .into_body()
         .collect()
@@ -454,6 +461,7 @@ async fn responses_route_aggregates_codex_stream_for_non_stream_clients() {
     assert_eq!(payload["provider"], "openai");
     assert_eq!(payload["auth"], "Bearer codex-token-a");
     assert_eq!(payload["account_id"], "acct_a");
+    assert_eq!(payload["model"], "gpt-5-codex");
     assert_eq!(payload["output"][0]["content"][0]["text"], "stream ok");
 }
 

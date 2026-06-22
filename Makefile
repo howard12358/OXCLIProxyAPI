@@ -9,6 +9,8 @@ SNAPSHOT_URL ?= http://$(GO_ADDR)/v0/management/runtime-snapshot
 RUST_BIND_ADDR ?= 127.0.0.1:4100
 RUST_READY_URL ?= http://$(RUST_BIND_ADDR)/readyz
 RUST_DIR ?= rust/cliproxy-data-plane
+UPSTREAM_HTTP_PROXY ?=
+UPSTREAM_HTTPS_PROXY ?=
 
 TMP_DIR ?= temp
 GO_PID_FILE ?= $(TMP_DIR)/dev-go.pid
@@ -17,7 +19,7 @@ RUST_PID_FILE ?= $(TMP_DIR)/dev-rust.pid
 RUST_LOG_FILE ?= $(TMP_DIR)/dev-rust.log
 SNAPSHOT_FILE ?= $(TMP_DIR)/cpa-runtime-snapshot.dev.json
 
-.PHONY: help dev-stack stop-stack restart-stack status-stack logs-stack logs-go logs-rust snapshot-stack test-responses
+.PHONY: help dev-stack stop-stack restart-stack status-stack ps-stack kill-stack-orphans logs-stack logs-go logs-rust snapshot-stack test-responses
 
 help:
 	@printf "%s\n" \
@@ -27,6 +29,8 @@ help:
 	"  make stop-stack     停止 Go/Rust 联调进程" \
 	"  make restart-stack  重启 Go/Rust 联调进程" \
 	"  make status-stack   查看 Go/Rust 联调进程状态" \
+	"  make ps-stack       列出当前仓库相关的 Go/Rust 进程" \
+	"  make kill-stack-orphans 杀掉当前仓库相关的 Go/Rust 孤儿进程" \
 	"  make logs-stack     查看 Go/Rust 联调日志" \
 	"  make logs-go        持续跟踪 Go 日志" \
 	"  make logs-rust      持续跟踪 Rust 日志" \
@@ -37,7 +41,9 @@ help:
 	"  GO_CONFIG=<path>        默认 $(GO_CONFIG)" \
 	"  MANAGEMENT_KEY=<key>    默认 $(MANAGEMENT_KEY)" \
 	"  GO_ADDR=<host:port>     默认 $(GO_ADDR)" \
-	"  RUST_BIND_ADDR=<addr>   默认 $(RUST_BIND_ADDR)"
+	"  RUST_BIND_ADDR=<addr>   默认 $(RUST_BIND_ADDR)" \
+	"  UPSTREAM_HTTP_PROXY=<url>  例如 http://127.0.0.1:7897" \
+	"  UPSTREAM_HTTPS_PROXY=<url>  例如 http://127.0.0.1:7897"
 
 dev-stack:
 	@set -euo pipefail; \
@@ -58,6 +64,7 @@ dev-stack:
 	$(MAKE) snapshot-stack >/dev/null; \
 	echo "启动 Rust 数据平面..."; \
 	nohup env http_proxy="$${http_proxy-}" https_proxy="$${https_proxy-}" HTTP_PROXY="$${HTTP_PROXY-}" HTTPS_PROXY="$${HTTPS_PROXY-}" all_proxy= ALL_PROXY= \
+		CLIPROXY_UPSTREAM_HTTP_PROXY="$(UPSTREAM_HTTP_PROXY)" CLIPROXY_UPSTREAM_HTTPS_PROXY="$(UPSTREAM_HTTPS_PROXY)" \
 		cargo run --manifest-path "$(RUST_DIR)/Cargo.toml" -- --bind-addr "$(RUST_BIND_ADDR)" --snapshot-file "$(SNAPSHOT_FILE)" \
 		>"$(RUST_LOG_FILE)" 2>&1 & echo $$! >"$(RUST_PID_FILE)"; \
 	for i in $$(seq 1 30); do \
@@ -92,6 +99,7 @@ dev-stack-url:
 	done; \
 	echo "启动 Rust 数据平面（snapshot-url 模式）..."; \
 	nohup env http_proxy="$${http_proxy-}" https_proxy="$${https_proxy-}" HTTP_PROXY="$${HTTP_PROXY-}" HTTPS_PROXY="$${HTTPS_PROXY-}" all_proxy= ALL_PROXY= \
+		CLIPROXY_UPSTREAM_HTTP_PROXY="$(UPSTREAM_HTTP_PROXY)" CLIPROXY_UPSTREAM_HTTPS_PROXY="$(UPSTREAM_HTTPS_PROXY)" \
 		cargo run --manifest-path "$(RUST_DIR)/Cargo.toml" -- --bind-addr "$(RUST_BIND_ADDR)" --snapshot-url "$(SNAPSHOT_URL)" --snapshot-bearer-token "$(MANAGEMENT_KEY)" \
 		>"$(RUST_LOG_FILE)" 2>&1 & echo $$! >"$(RUST_PID_FILE)"; \
 	for i in $$(seq 1 30); do \
@@ -134,7 +142,8 @@ stop-stack:
 		for pid in $$(lsof -tiTCP:$$port -sTCP:LISTEN 2>/dev/null || true); do \
 			kill $$pid 2>/dev/null || true; \
 		done; \
-	done
+	done; \
+	GO_ADDR="$(GO_ADDR)" RUST_BIND_ADDR="$(RUST_BIND_ADDR)" ./scripts/dev-stack-procs.sh --kill >/dev/null || true
 
 restart-stack:
 	@$(MAKE) stop-stack
@@ -160,6 +169,12 @@ status-stack:
 			echo "$$service 未运行"; \
 		fi; \
 	done
+
+ps-stack:
+	@GO_ADDR="$(GO_ADDR)" RUST_BIND_ADDR="$(RUST_BIND_ADDR)" ./scripts/dev-stack-procs.sh
+
+kill-stack-orphans:
+	@GO_ADDR="$(GO_ADDR)" RUST_BIND_ADDR="$(RUST_BIND_ADDR)" ./scripts/dev-stack-procs.sh --kill
 
 logs-stack:
 	@set -euo pipefail; \

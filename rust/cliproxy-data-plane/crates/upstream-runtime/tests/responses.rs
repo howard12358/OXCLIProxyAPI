@@ -110,6 +110,8 @@ async fn spawn_upstream_server() -> String {
 async fn execute_responses_calls_openai_upstream() {
     let base_url = spawn_upstream_server().await;
     let runtime = UpstreamRuntime::new(UpstreamRuntimeConfig {
+        http_proxy: None,
+        https_proxy: None,
         openai: Some(OpenAiConfig {
             base_url,
             api_key: "openai-key".to_string(),
@@ -141,6 +143,8 @@ async fn execute_responses_calls_openai_upstream() {
 async fn execute_responses_calls_codex_upstream() {
     let base_url = spawn_upstream_server().await;
     let runtime = UpstreamRuntime::new(UpstreamRuntimeConfig {
+        http_proxy: None,
+        https_proxy: None,
         openai: None,
         codex: Some(CodexConfig {
             base_url,
@@ -174,6 +178,8 @@ async fn execute_responses_calls_codex_upstream() {
 async fn execute_responses_for_auth_uses_selected_codex_oauth_credential() {
     let base_url = spawn_upstream_server().await;
     let runtime = UpstreamRuntime::new(UpstreamRuntimeConfig {
+        http_proxy: None,
+        https_proxy: None,
         openai: None,
         codex: Some(CodexConfig {
             base_url: base_url.clone(),

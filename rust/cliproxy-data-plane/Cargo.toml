@@ -27,10 +27,11 @@ cliproxy-upstream-runtime = { path = "crates/upstream-runtime" }
 futures-util = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 tokio = { version = "1.45", features = ["macros", "rt-multi-thread", "signal", "net"] }
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time"] }
 
 [dev-dependencies]
 http-body-util = "0.1"

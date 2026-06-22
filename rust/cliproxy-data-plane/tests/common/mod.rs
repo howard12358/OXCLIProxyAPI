@@ -24,6 +24,8 @@ pub fn test_runtime(responses_enabled: bool) -> RuntimeStateHandle {
         snapshot_url: None,
         snapshot_bearer_token: None,
         snapshot_poll_seconds: 30,
+        upstream_http_proxy: None,
+        upstream_https_proxy: None,
         openai_base_url: "https://api.openai.com/v1".to_string(),
         openai_api_key: None,
         codex_base_url: "https://chatgpt.com/backend-api/codex".to_string(),
@@ -112,6 +114,8 @@ pub fn test_upstream() -> UpstreamRuntime {
 
 pub fn openai_upstream(base_url: String) -> UpstreamRuntime {
     UpstreamRuntime::new(UpstreamRuntimeConfig {
+        http_proxy: None,
+        https_proxy: None,
         openai: Some(OpenAiConfig {
             base_url,
             api_key: "openai-key".to_string(),
@@ -122,6 +126,8 @@ pub fn openai_upstream(base_url: String) -> UpstreamRuntime {
 
 pub fn codex_upstream(base_url: String) -> UpstreamRuntime {
     UpstreamRuntime::new(UpstreamRuntimeConfig {
+        http_proxy: None,
+        https_proxy: None,
         openai: None,
         codex: Some(CodexConfig {
             base_url,
