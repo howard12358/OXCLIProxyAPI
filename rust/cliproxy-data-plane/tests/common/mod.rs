@@ -24,6 +24,7 @@ pub fn test_runtime(responses_enabled: bool) -> RuntimeStateHandle {
         snapshot_url: None,
         snapshot_bearer_token: None,
         snapshot_poll_seconds: 30,
+        upstream_proxy: None,
         upstream_http_proxy: None,
         upstream_https_proxy: None,
         openai_base_url: "https://api.openai.com/v1".to_string(),
@@ -114,6 +115,7 @@ pub fn test_upstream() -> UpstreamRuntime {
 
 pub fn openai_upstream(base_url: String) -> UpstreamRuntime {
     UpstreamRuntime::new(UpstreamRuntimeConfig {
+        upstream_proxy: None,
         http_proxy: None,
         https_proxy: None,
         openai: Some(OpenAiConfig {
@@ -126,6 +128,7 @@ pub fn openai_upstream(base_url: String) -> UpstreamRuntime {
 
 pub fn codex_upstream(base_url: String) -> UpstreamRuntime {
     UpstreamRuntime::new(UpstreamRuntimeConfig {
+        upstream_proxy: None,
         http_proxy: None,
         https_proxy: None,
         openai: None,
@@ -256,6 +259,76 @@ pub async fn spawn_codex_failover_upstream() -> String {
                 [("content-type", "text/event-stream; charset=utf-8")],
                 Body::from(format!(
                     "event: response.completed\ndata: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp-retry-1\",\"object\":\"response\",\"status\":\"completed\",\"auth\":\"{}\",\"model\":{}}}}}\n\n",
+                    auth,
+                    payload["model"]
+                )),
+            )
+                .into_response()
+        } else {
+            AxumJson(json!({
+                "object": "response",
+                "status": "completed",
+                "auth": auth,
+                "model": payload["model"]
+            }))
+            .into_response()
+        }
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind upstream");
+    let addr = listener.local_addr().expect("upstream addr");
+    let app = AxumRouter::new().route("/responses", axum_post(responses));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve upstream");
+    });
+    format!("http://{}", addr)
+}
+
+pub async fn spawn_codex_quota_failover_upstream() -> String {
+    async fn responses(headers: HeaderMap, request: Request<Body>) -> impl IntoResponse {
+        let auth = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        if auth == "Bearer codex-token-a" {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [("content-type", "application/json")],
+                Body::from(
+                    json!({
+                        "error": {
+                            "type": "usage_limit_reached",
+                            "message": "The usage limit has been reached",
+                            "plan_type": "free",
+                            "resets_in_seconds": 900
+                        }
+                    })
+                    .to_string(),
+                ),
+            )
+                .into_response();
+        }
+
+        let body = request
+            .into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let payload: Value = serde_json::from_slice(&body).expect("parse payload");
+        let stream = payload
+            .get("stream")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        if stream {
+            (
+                StatusCode::OK,
+                [("content-type", "text/event-stream; charset=utf-8")],
+                Body::from(format!(
+                    "event: response.completed\ndata: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp-quota-retry-1\",\"object\":\"response\",\"status\":\"completed\",\"auth\":\"{}\",\"model\":{}}}}}\n\n",
                     auth,
                     payload["model"]
                 )),

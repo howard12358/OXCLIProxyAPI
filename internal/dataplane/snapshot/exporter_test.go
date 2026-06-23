@@ -12,6 +12,9 @@ import (
 func TestBuildRuntimeSnapshotExportsCodexOAuthAuth(t *testing.T) {
 	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
 	cfg := &config.Config{
+		SDKConfig: config.SDKConfig{
+			ProxyURL: "socks5h://127.0.0.1:7897",
+		},
 		DataPlane: config.DataPlaneConfig{
 			ResponsesBaseURL: "http://127.0.0.1:4100",
 		},
@@ -61,6 +64,9 @@ func TestBuildRuntimeSnapshotExportsCodexOAuthAuth(t *testing.T) {
 	}
 	if snapshot.Routing.SessionTTLSeconds != 2700 {
 		t.Fatalf("routing.session_ttl_seconds = %d, want 2700", snapshot.Routing.SessionTTLSeconds)
+	}
+	if snapshot.Network.UpstreamProxy != "socks5h://127.0.0.1:7897" {
+		t.Fatalf("network.upstream_proxy = %q, want socks5h://127.0.0.1:7897", snapshot.Network.UpstreamProxy)
 	}
 	if snapshot.Providers["codex"].Enabled != true {
 		t.Fatalf("providers.codex.enabled = %v, want true", snapshot.Providers["codex"].Enabled)

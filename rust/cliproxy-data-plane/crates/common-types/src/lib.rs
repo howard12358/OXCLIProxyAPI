@@ -61,6 +61,8 @@ pub mod snapshot {
         #[serde(default)]
         pub auth_pool: Vec<AuthRecord>,
         #[serde(default)]
+        pub network: NetworkConfig,
+        #[serde(default)]
         pub usage_queue: UsageQueueConfig,
         #[serde(default)]
         pub feature_flags: BTreeMap<String, bool>,
@@ -158,6 +160,12 @@ pub mod snapshot {
         pub enabled: bool,
         #[serde(default)]
         pub backend: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+    pub struct NetworkConfig {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub upstream_proxy: Option<String>,
     }
 
     const fn default_session_ttl_seconds() -> u64 {

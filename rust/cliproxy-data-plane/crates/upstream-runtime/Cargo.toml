@@ -8,9 +8,10 @@ anyhow = "1.0"
 bytes = "1.11"
 cliproxy-common-types = { path = "../common-types" }
 futures-util = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "socks"] }
 serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1"
+url = "2.5"
 
 [dev-dependencies]
 axum = "0.8"

@@ -430,6 +430,7 @@ func (h *Handler) refreshAntigravityOAuthAccessToken(ctx context.Context, auth *
 		auth.LastRefreshedAt = now
 		auth.UpdatedAt = now
 		_, _ = h.authManager.Update(ctx, auth)
+		h.notifySnapshotIfChanged(ctx)
 	}
 
 	return strings.TrimSpace(tokenResp.AccessToken), nil

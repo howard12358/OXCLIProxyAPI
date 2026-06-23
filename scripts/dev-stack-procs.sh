@@ -6,9 +6,32 @@ go_addr="${GO_ADDR:-127.0.0.1:8317}"
 rust_addr="${RUST_BIND_ADDR:-127.0.0.1:4100}"
 go_port="${go_addr##*:}"
 rust_port="${rust_addr##*:}"
+tmp_dir="${TMP_DIR:-temp}"
+go_pid_file="${GO_PID_FILE:-$tmp_dir/dev-go.pid}"
+rust_pid_file="${RUST_PID_FILE:-$tmp_dir/dev-rust.pid}"
 kill_mode="${1:-}"
 tmp_file="$(mktemp)"
 trap 'rm -f "$tmp_file"' EXIT
+
+to_lower() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+parse_ps_line() {
+  local line="$1"
+  local __pid_var="$2"
+  local __ppid_var="$3"
+  local __command_var="$4"
+  local parsed_pid=""
+  local parsed_ppid=""
+  local parsed_command=""
+
+  read -r parsed_pid parsed_ppid parsed_command <<<"$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]+//')"
+
+  printf -v "$__pid_var" '%s' "$parsed_pid"
+  printf -v "$__ppid_var" '%s' "$parsed_ppid"
+  printf -v "$__command_var" '%s' "$parsed_command"
+}
 
 record_pid() {
   local pid="$1"
@@ -23,34 +46,12 @@ record_pid() {
   printf "%s\t%s\t%s\t%s\t%s\n" "$pid" "$ppid" "$kind" "$reason" "$command" >>"$tmp_file"
 }
 
-while IFS= read -r line; do
-  [[ -n "$line" ]] || continue
-  pid="${line%% *}"
-  rest="${line#* }"
-  ppid="${rest%% *}"
-  command="${rest#* }"
-
-  if [[ "$command" == *"$repo_root"* ]]; then
-    if [[ "$command" == *"cliproxy-data-plane"* ]]; then
-      record_pid "$pid" "rust" "cmdline" "$ppid" "$command"
-      continue
-    fi
-    if [[ "$command" == *"/server --config"* || "$command" == *"go run ./cmd/server"* || "$command" == *"/cmd/server"* ]]; then
-      record_pid "$pid" "go" "cmdline" "$ppid" "$command"
-      continue
-    fi
-  fi
-done < <(ps ax -o pid=,ppid=,command=)
-
 for port in "$go_port" "$rust_port"; do
   while IFS= read -r pid; do
     [[ -n "$pid" ]] || continue
     line="$(ps -p "$pid" -o pid=,ppid=,command= 2>/dev/null || true)"
     [[ -n "$line" ]] || continue
-    _pid="${line%% *}"
-    rest="${line#* }"
-    ppid="${rest%% *}"
-    command="${rest#* }"
+    parse_ps_line "$line" _pid ppid command
     kind="unknown"
     if [[ "$port" == "$go_port" ]]; then
       kind="go"
@@ -60,6 +61,44 @@ for port in "$go_port" "$rust_port"; do
     record_pid "$_pid" "$kind" "listen:${port}" "$ppid" "$command"
   done < <(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)
 done
+
+for spec in \
+  "go:$go_pid_file" \
+  "rust:$rust_pid_file"; do
+  kind="${spec%%:*}"
+  pid_file="${spec#*:}"
+  [[ -f "$pid_file" ]] || continue
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  [[ -n "$pid" ]] || continue
+  line="$(ps -p "$pid" -o pid=,ppid=,command= 2>/dev/null || true)"
+  [[ -n "$line" ]] || continue
+  parse_ps_line "$line" _pid ppid command
+  record_pid "$_pid" "$kind" "pidfile:$(basename "$pid_file")" "$ppid" "$command"
+done
+
+while IFS= read -r line; do
+  [[ -n "$line" ]] || continue
+  parse_ps_line "$line" pid ppid command
+  [[ -n "${command:-}" ]] || continue
+
+  if [[ "$(to_lower "$command")" == *"$(to_lower "$repo_root")"* ]]; then
+    if [[ "$command" == *"cliproxy-data-plane"* ]]; then
+      record_pid "$pid" "rust" "cmdline" "$ppid" "$command"
+    fi
+  fi
+done < <(pgrep -fl "cliproxy-data-plane" 2>/dev/null || true)
+
+while IFS= read -r line; do
+  [[ -n "$line" ]] || continue
+  parse_ps_line "$line" pid ppid command
+  [[ -n "${command:-}" ]] || continue
+
+  if [[ "$(to_lower "$command")" == *"$(to_lower "$repo_root")"* ]]; then
+    if [[ "$command" == *"/server --config"* || "$command" == *"go run ./cmd/server"* || "$command" == *"/cmd/server"* ]]; then
+      record_pid "$pid" "go" "cmdline" "$ppid" "$command"
+    fi
+  fi
+done < <(pgrep -fl "/server --config|go run ./cmd/server|/cmd/server" 2>/dev/null || true)
 
 if [[ ! -s "$tmp_file" ]]; then
   echo "未发现当前仓库相关的 Go/Rust 进程"

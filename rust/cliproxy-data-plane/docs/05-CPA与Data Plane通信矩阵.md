@@ -39,6 +39,7 @@
 | 配置下发 | Rust 拉取 | Go CPA | `runtime snapshot` 全量快照 | 本地 loopback HTTP | 否 | `【已联通】` Go 已提供 `/v0/management/runtime-snapshot`，Rust 已支持文件 / HTTP 拉取与原子应用 |
 | 快照刷新 | Rust 定时拉取 | Go CPA | 最新 `version` 对应的运行时配置 | 本地 loopback HTTP | 否 | `【已联通】` Rust 已支持轮询、版本比较、`degraded` 降级；Go 已能稳定导出 snapshot |
 | 首次启动校验 | Rust | Go CPA | 首次 snapshot 获取 | 本地 loopback HTTP | 否 | `【已联通】` Rust 已支持 fail closed，Go 已提供正式 snapshot 接口 |
+| 代理策略下发 | Rust 拉取 | Go CPA | 默认上游代理语义，如 `inherit` / `direct` / `socks5://...` | 本地 loopback HTTP | 否 | `【已设计】` 计划并入 `runtime snapshot`，仅作用于 `Rust -> Provider`，不作用于 `Go <-> Rust` |
 | 流量接入 | Client | Rust Data Plane | 当前聚焦 `/v1/responses`，后续再扩 `/v1/chat/completions` 等请求 | HTTP / SSE | 是 | Rust 已实现 `/v1/responses` ingress，并已接入 router-core 选路 |
 | 上游执行 | Rust Data Plane | Provider | OpenAI / Codex / Claude / Gemini 请求 | HTTP / WebSocket / SSE | 是 | Rust 已实现 OpenAI / Codex 的 `/responses` HTTP upstream v1，并已打通 Codex OAuth 真实执行；Claude / Gemini / WebSocket relay 仍未实现 |
 | usage 输出 | Rust Data Plane | Go CPA 或队列系统 | usage 事件 | queue / HTTP / 本地接口 | 否 | `【仅设计】` Rust 当前仅保留响应中的 usage 语义，正式 usage event 输出未实现 |
@@ -49,7 +50,65 @@
 | 热路径绕过 | Rust Data Plane | Client / Provider | 请求与响应主链路 | 直接连接 | 是 | 已形成 `/v1/responses -> Rust -> OpenAI/Codex upstream` 的基础闭环 |
 | 入口切流 | Go CPA | Rust Data Plane | 把 `/v1/responses` 请求转发给 sidecar | 本地 HTTP reverse proxy | 是 | `【已联通】` Go 已支持通过 `data-plane.responses-base-url` 可选转发 `/v1/responses` 与 `/backend-api/codex/responses` |
 
-## 4. 当前已标出的 CPA 交互点
+## 4. 当前交互状态图
+
+### 4.1 已实现与未实现总览
+
+```mermaid
+flowchart TD
+    Client[下游 Client / Codex]
+    Go[Go CPA<br/>管理面 + 入口网关]
+    Rust[Rust Data Plane]
+    Upstream[上游 Codex / OpenAI]
+    Queue[Usage 队列 / 管理回传]
+    Health[实例健康管理]
+    Auth[Auth 健康 / Cooldown]
+
+    Client -->|POST /v1/responses<br/>已实现| Go
+    Go -->|反向代理 /v1/responses<br/>已实现| Rust
+    Rust -->|HTTP / SSE 调用上游<br/>已实现| Upstream
+
+    Rust -->|GET /v0/management/runtime-snapshot<br/>首次加载 + 定时刷新<br/>已实现| Go
+
+    Rust -.->|usage 事件上报<br/>未实现| Queue
+    Rust -.->|ready/degraded/failed 主动注册/回传<br/>未实现| Health
+    Go -.->|基于 Rust 健康做摘流/分发<br/>未实现| Rust
+    Rust -.->|auth unhealthy / cooldown 建议<br/>未实现| Auth
+    Auth -.->|反馈到 Go 管理面<br/>未实现| Go
+```
+
+### 4.2 已实现交互
+
+```mermaid
+flowchart TD
+    Client[下游 Client / Codex]
+    Go[Go CPA]
+    Rust[Rust Data Plane]
+    Upstream[上游 Codex / OpenAI]
+
+    Client -->|/v1/responses| Go
+    Go -->|reverse proxy| Rust
+    Rust -->|upstream execute| Upstream
+    Rust -->|拉取 runtime snapshot| Go
+```
+
+### 4.3 未实现交互
+
+```mermaid
+flowchart TD
+    Rust[Rust Data Plane]
+    Go[Go CPA]
+    Queue[Usage 队列]
+    Health[实例健康管理]
+    Auth[Auth 健康 / Cooldown]
+
+    Rust -.->|usage 事件| Queue
+    Rust -.->|状态回传| Go
+    Go -.->|基于健康摘流/分发| Rust
+    Rust -.->|auth 异常 / cooldown 建议| Go
+```
+
+## 5. 当前已标出的 CPA 交互点
 
 当前真正和 CPA 相关、并且已经在 Rust 侧有明确接入位置的点，只有下面 4 个：
 
@@ -93,9 +152,9 @@
 
 这些还没有形成可供 CPA 直接对接的稳定接口。
 
-## 5. 当前最关键的两条通信链
+## 6. 当前最关键的两条通信链
 
-### 4.1 Go 到 Rust
+### 6.1 Go 到 Rust
 
 当前最重要的控制面通信是：
 
@@ -109,7 +168,7 @@
 - Rust 是快照消费者
 - 配置更新通过版本号驱动，而不是推送式强耦合控制
 
-### 4.2 Rust 到 Go
+### 6.2 Rust 到 Go
 
 当前最重要的反馈面通信是：
 
@@ -121,9 +180,9 @@
 
 这条链当前还没有完全定死协议，但已经明确这类回传不应把 Go 重新拉回请求主链路。
 
-## 6. 热路径与非热路径边界
+## 7. 热路径与非热路径边界
 
-### 5.1 热路径
+### 7.1 热路径
 
 真正属于热路径的通信是：
 
@@ -134,7 +193,7 @@
 
 这些通信必须由 Rust 独立承担，Go 不应重新插入中间转发。
 
-### 5.2 非热路径
+### 7.2 非热路径
 
 不属于热路径但必须存在的通信是：
 
@@ -144,9 +203,15 @@
 
 这些通信更关注正确性、可恢复性和可观测性，而不是单请求延迟。
 
-## 7. 当前实现状态
+额外约束：
 
-### 7.1 Rust 已实现
+- `Go <-> Rust` 的本地控制面通信应始终直连
+- 本地 snapshot 拉取、健康探测、sidecar 转发不应走全局出口代理
+- 代理策略只应用于 `Go -> Provider` 或 `Rust -> Provider` 的外部上游请求
+
+## 8. 当前实现状态
+
+### 8.1 Rust 已实现
 
 - 本地文件 snapshot 拉取
 - HTTP snapshot 拉取能力
@@ -177,7 +242,7 @@
 - 对 Codex 上游的 `stream=false -> stream=true -> 聚合回非流式 JSON`
 - 可重试 Codex auth 失败后的自动切换执行
 
-### 7.2 Rust 未实现
+### 8.2 Rust 未实现
 
 - usage 事件输出
 - auth 健康信号回传
@@ -187,7 +252,7 @@
 - WebSocket relay 型 upstream runtime
 - `/v1/chat/completions`、`/v1/messages` ingress
 
-### 7.3 Go 已实现 / 未实现
+### 8.3 Go 已实现 / 未实现
 
 Go 已实现：
 
@@ -199,7 +264,7 @@ Go 未实现：
 - 消费 Rust usage / 健康 / auth 信号的接口
 - 默认生产路径切流策略与回退编排
 
-### 7.4 当前里程碑对应关系
+### 8.4 当前里程碑对应关系
 
 - 里程碑 0：已完成
 - 里程碑 1：已完成
@@ -213,7 +278,7 @@ Go 未实现：
 - 里程碑 6：已完成 MVP 所需最小子集
 - Go 侧已完成可选 sidecar 转发接入
 
-## 8. 建议的最小落地顺序
+## 9. 建议的最小落地顺序
 
 从通信矩阵看，最先应当打通的不是所有通信，而是最小闭环：
 
@@ -224,7 +289,7 @@ Go 未实现：
 5. Rust 向外暴露可供观测的健康和指标
 6. 再逐步增加 usage / auth 健康 / cooldown 回传
 
-## 9. 结论
+## 10. 结论
 
 当前设计里的 CPA 与数据平面通信，本质上不是“两个服务互相代理请求”，而是：
 

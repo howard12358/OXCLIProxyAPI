@@ -1,58 +1,112 @@
 # AGENTS.md
 
-Go 1.26+ proxy server providing OpenAI/Gemini/Claude/Codex compatible APIs with OAuth and round-robin load balancing.
+This file defines long-lived rules for coding agents working in this repository.
 
-## Repository
-- GitHub: https://github.com/router-for-me/CLIProxyAPI
+## Source Of Truth
 
-## Commands
-```bash
-gofmt -w . # Format (required after Go changes)
-go build -o cli-proxy-api ./cmd/server # Build
-go run ./cmd/server # Run dev server
-go test ./... # Run all tests
-go test -v -run TestName ./path/to/pkg # Run single test
-go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRED after changes)
-```
-- Common flags: `--config <path>`, `--tui`, `--standalone`, `--local-model`, `--no-browser`, `--oauth-callback-port <port>`
+- Repository documents are the source of truth.
+- Chat history is not the source of truth.
+- If information is uncertain, mark it `待确认`. Do not invent facts.
 
-## Config
-- Default config: `config.yaml` (template: `config.example.yaml`)
-- `.env` is auto-loaded from the working directory
-- Auth material defaults under `auths/`
-- Storage backends: file-based default; optional Postgres/git/object store (`PGSTORE_*`, `GITSTORE_*`, `OBJECTSTORE_*`)
+## Required Reading Before Changes
 
-## Architecture
-- `cmd/server/` — Server entrypoint
-- `internal/api/` — Gin HTTP API (routes, middleware, modules)
-- `internal/api/modules/amp/` — Amp integration (Amp-style routes + reverse proxy)
-- `internal/thinking/` — Main thinking/reasoning pipeline. `ApplyThinking()` (apply.go) parses suffixes (`suffix.go`, suffix overrides body), normalizes config to canonical `ThinkingConfig` (`types.go`), normalizes and validates centrally (`validate.go`/`convert.go`), then applies provider-specific output via `ProviderApplier`. Do not break this "canonical representation → per-provider translation" architecture.
-- `internal/runtime/executor/` — Per-provider runtime executors (incl. Codex WebSocket)
-- `internal/translator/` — Provider protocol translators (and shared `common`)
-- `internal/registry/` — Model registry + remote updater (`StartModelsUpdater`); `--local-model` disables remote updates
-- `internal/store/` — Storage implementations and secret resolution
-- `internal/managementasset/` — Config snapshots and management assets
-- `internal/cache/` — Request signature caching
-- `internal/watcher/` — Config hot-reload and watchers
-- `internal/wsrelay/` — WebSocket relay sessions
-- `internal/usage/` — Usage and token accounting
-- `internal/tui/` — Bubbletea terminal UI (`--tui`, `--standalone`)
-- `sdk/cliproxy/` — Embeddable SDK entry (service/builder/watchers/pipeline)
-- `test/` — Cross-module integration tests
+- Read this file first.
+- Then read:
+  - `.ai-harness/README.md`
+  - `.ai-harness/project-state.md`
+  - `.ai-harness/architecture.md`
+  - `.ai-harness/conventions.md`
+  - `.ai-harness/commands.md`
+  - `.ai-harness/testing.md`
+- Also read any relevant files under:
+  - `.ai-harness/decisions/`
+  - `.ai-harness/features/`
+  - `.ai-harness/bugs/`
 
-## Code Conventions
-- Keep changes small and simple (KISS)
-- Comments in English only
-- If editing code that already contains non-English comments, translate them to English (don’t add new non-English comments)
-- For user-visible strings, keep the existing language used in that file/area
-- New Markdown docs should be in English unless the file is explicitly language-specific (e.g. `README_CN.md`)
-- As a rule, do not make standalone changes to `internal/translator/`. You may modify it only as part of broader changes elsewhere.
-- If a task requires changing only `internal/translator/`, run `gh repo view --json viewerPermission -q .viewerPermission` to confirm you have `WRITE`, `MAINTAIN`, or `ADMIN`. If you do, you may proceed; otherwise, file a GitHub issue including the goal, rationale, and the intended implementation code, then stop further work.
-- `internal/runtime/executor/` should contain executors and their unit tests only. Place any helper/supporting files under `internal/runtime/executor/helps/`.
-- Follow `gofmt`; keep imports goimports-style; wrap errors with context where helpful
-- Do not use `log.Fatal`/`log.Fatalf` (terminates the process); prefer returning errors and logging via logrus
-- Shadowed variables: use method suffix (`errStart := server.Start()`)
-- Wrap defer errors: `defer func() { if err := f.Close(); err != nil { log.Errorf(...) } }()`
-- Use logrus structured logging; avoid leaking secrets/tokens in logs
-- Avoid panics in HTTP handlers; prefer logged errors and meaningful HTTP status codes
-- Timeouts are allowed only during credential acquisition; after an upstream connection is established, do not set timeouts for any subsequent network behavior. Intentional exceptions that must remain allowed are the Codex websocket liveness deadlines in `internal/runtime/executor/codex_websockets_executor.go`, the wsrelay session deadlines in `internal/wsrelay/session.go`, the management APICall timeout in `internal/api/handlers/management/api_tools.go`, and the `cmd/fetch_antigravity_models` utility timeouts
+## When `.ai-harness/` Must Be Updated
+
+- Update `.ai-harness/project-state.md` when implemented capabilities, active direction, or known risks change.
+- Update `.ai-harness/architecture.md` when module boundaries, data flow, control flow, extension points, config flow, or runtime topology change.
+- Update `.ai-harness/conventions.md` when stable project conventions change.
+- Update `.ai-harness/commands.md` or `.ai-harness/testing.md` when supported commands or validation workflow change.
+- Update `.ai-harness/features/` when user-visible behavior changes.
+- Update `.ai-harness/bugs/` when a bug is fixed and root cause is understood.
+- Update `.ai-harness/decisions/` when architecture, public API, config format, deployment mode, directory structure, or data model changes.
+- After every non-trivial session, append an entry to `.ai-harness/session-log.md`.
+
+## Things That Must Not Change Silently
+
+Without explicit user request and corresponding documentation updates, do not silently change:
+
+- architecture
+- public APIs
+- database schema or data model
+- config format
+- CLI commands or flags
+- deployment mode
+- directory structure
+
+If such a change is necessary:
+
+1. Create or update an ADR under `.ai-harness/decisions/`
+2. Update the relevant architecture / state / commands / testing docs
+3. Then implement the code change
+
+## General Change Rules
+
+- Prefer small, local changes.
+- Do not mix feature development, bug fixing, and refactoring in one change unless explicitly required.
+- Do not treat unrelated cleanup as part of the task.
+- Do not delete existing files unless explicitly requested.
+
+## Bug Fix Workflow
+
+1. Capture symptom and impact.
+2. Confirm current behavior from code and tests.
+3. Fix the bug with the smallest reasonable scope.
+4. Run relevant validation.
+5. Add or update a bug record under `.ai-harness/bugs/`.
+6. Update `.ai-harness/session-log.md`.
+
+## Feature Development Workflow
+
+1. Read relevant `.ai-harness/` docs and related code.
+2. Confirm whether behavior is already documented under `.ai-harness/features/`.
+3. Implement with minimal scope.
+4. Run relevant validation.
+5. Update or add feature docs under `.ai-harness/features/`.
+6. Update `.ai-harness/project-state.md` if capability/state changed.
+7. Update `.ai-harness/session-log.md`.
+
+## Architecture Change Workflow
+
+1. Confirm the change is actually required.
+2. Write or update an ADR first.
+3. Update `.ai-harness/architecture.md` and related docs.
+4. Implement the code change.
+5. Run broader validation than a normal local change.
+6. Update `.ai-harness/session-log.md`.
+
+## Testing And Validation Requirements
+
+- Run relevant tests for the area you changed, or explain why tests were not run.
+- For Go changes:
+  - run `gofmt -w`
+  - run relevant `go test` commands
+  - verify build with `go build -o /tmp/cli-proxy-api-check ./cmd/server && rm -f /tmp/cli-proxy-api-check`
+- For Rust changes:
+  - run `cargo fmt --manifest-path rust/cliproxy-data-plane/Cargo.toml`
+  - run relevant `cargo test` commands
+- For cross-runtime changes, prefer both automated tests and manual stack validation when practical.
+
+## Stable Repository Rules
+
+- Comments in code must be English only.
+- If editing code that already contains non-English comments, translate them to English rather than adding more non-English comments.
+- For user-visible strings, preserve the language already used in that area.
+- New Markdown docs should be English unless the file is explicitly language-specific.
+- Do not use `log.Fatal` / `log.Fatalf`; return errors and log with context instead.
+- Avoid panics in HTTP handlers.
+- Do not make standalone changes to `internal/translator/` unless broader work requires it.
+- `internal/runtime/executor/` should contain executors and their unit tests only; helpers go under `internal/runtime/executor/helps/`.
+- Timeouts are allowed only during credential acquisition, except the existing documented exceptions already present in the codebase.

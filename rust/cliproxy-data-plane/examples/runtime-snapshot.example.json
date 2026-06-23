@@ -55,6 +55,9 @@
       "cooldown_until": null
     }
   ],
+  "network": {
+    "upstream_proxy": ""
+  },
   "usage_queue": {
     "enabled": true,
     "backend": "redis"

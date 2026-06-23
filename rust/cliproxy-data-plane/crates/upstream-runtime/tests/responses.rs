@@ -11,8 +11,8 @@ use cliproxy_common_types::{
     upstream::ProviderKind,
 };
 use cliproxy_upstream_runtime::{
-    CodexConfig, OpenAiConfig, UpstreamExecutionResult, UpstreamRequest, UpstreamRuntime,
-    UpstreamRuntimeConfig,
+    CodexConfig, OpenAiConfig, ProxySetting, UpstreamExecutionResult, UpstreamRequest,
+    UpstreamRuntime, UpstreamRuntimeConfig,
 };
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
@@ -110,6 +110,7 @@ async fn spawn_upstream_server() -> String {
 async fn execute_responses_calls_openai_upstream() {
     let base_url = spawn_upstream_server().await;
     let runtime = UpstreamRuntime::new(UpstreamRuntimeConfig {
+        upstream_proxy: None,
         http_proxy: None,
         https_proxy: None,
         openai: Some(OpenAiConfig {
@@ -124,7 +125,7 @@ async fn execute_responses_calls_openai_upstream() {
             model: "gpt-5".to_string(),
             body: br#"{"model":"gpt-5","stream":false}"#.to_vec(),
             stream: false,
-        })
+        }, None)
         .await
         .expect("execute upstream");
 
@@ -143,6 +144,7 @@ async fn execute_responses_calls_openai_upstream() {
 async fn execute_responses_calls_codex_upstream() {
     let base_url = spawn_upstream_server().await;
     let runtime = UpstreamRuntime::new(UpstreamRuntimeConfig {
+        upstream_proxy: None,
         http_proxy: None,
         https_proxy: None,
         openai: None,
@@ -159,7 +161,7 @@ async fn execute_responses_calls_codex_upstream() {
             model: "gpt-5-codex".to_string(),
             body: br#"{"model":"gpt-5-codex","stream":false}"#.to_vec(),
             stream: false,
-        })
+        }, None)
         .await
         .expect("execute upstream");
 
@@ -178,6 +180,7 @@ async fn execute_responses_calls_codex_upstream() {
 async fn execute_responses_for_auth_uses_selected_codex_oauth_credential() {
     let base_url = spawn_upstream_server().await;
     let runtime = UpstreamRuntime::new(UpstreamRuntimeConfig {
+        upstream_proxy: None,
         http_proxy: None,
         https_proxy: None,
         openai: None,
@@ -218,6 +221,7 @@ async fn execute_responses_for_auth_uses_selected_codex_oauth_credential() {
                 body: br#"{"model":"gpt-5-codex","stream":false}"#.to_vec(),
                 stream: false,
             },
+            None,
         )
         .await
         .expect("execute upstream");
@@ -239,5 +243,20 @@ async fn execute_responses_for_auth_uses_selected_codex_oauth_credential() {
             assert_eq!(payload["openai_beta"], "responses=auth");
         }
         UpstreamExecutionResult::Streaming(_) => panic!("expected non-streaming response"),
+    }
+}
+
+#[test]
+fn proxy_setting_parses_inherit_direct_and_socks5h() {
+    let inherit = ProxySetting::parse("").expect("parse inherit");
+    assert!(matches!(inherit, ProxySetting::Inherit));
+
+    let direct = ProxySetting::parse("direct").expect("parse direct");
+    assert!(matches!(direct, ProxySetting::Direct));
+
+    let socks5h = ProxySetting::parse("socks5h://127.0.0.1:7897").expect("parse socks5h");
+    match socks5h {
+        ProxySetting::Proxy(url) => assert_eq!(url.as_str(), "socks5h://127.0.0.1:7897"),
+        other => panic!("expected explicit proxy, got {other:?}"),
     }
 }

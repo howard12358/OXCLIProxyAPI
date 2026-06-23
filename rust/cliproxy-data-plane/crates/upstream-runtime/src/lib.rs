@@ -1,7 +1,9 @@
 use std::{
+    collections::HashMap,
     collections::BTreeMap,
+    env,
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -17,6 +19,7 @@ use reqwest::{
     header::{ACCEPT, AUTHORIZATION, CONNECTION, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT},
 };
 use tracing::info;
+use url::Url;
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>;
 const CODEX_ORIGINATOR: &str = "codex-tui";
 
@@ -36,6 +39,7 @@ pub struct CodexConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct UpstreamRuntimeConfig {
+    pub upstream_proxy: Option<String>,
     pub http_proxy: Option<String>,
     pub https_proxy: Option<String>,
     pub openai: Option<OpenAiConfig>,
@@ -45,7 +49,41 @@ pub struct UpstreamRuntimeConfig {
 #[derive(Clone)]
 pub struct UpstreamRuntime {
     config: Arc<UpstreamRuntimeConfig>,
-    client: Client,
+    default_client: Client,
+    proxy_clients: Arc<RwLock<HashMap<String, Client>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProxySetting {
+    Inherit,
+    Direct,
+    Proxy(Url),
+}
+
+impl ProxySetting {
+    pub fn parse(raw: &str) -> Result<Self> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Ok(Self::Inherit);
+        }
+        if trimmed.eq_ignore_ascii_case("direct") || trimmed.eq_ignore_ascii_case("none") {
+            return Ok(Self::Direct);
+        }
+
+        let parsed = Url::parse(trimmed).with_context(|| format!("invalid proxy URL: {trimmed}"))?;
+        match parsed.scheme() {
+            "http" | "https" | "socks5" | "socks5h" => Ok(Self::Proxy(parsed)),
+            other => bail!("unsupported proxy scheme: {other}"),
+        }
+    }
+
+    fn cache_key(&self) -> String {
+        match self {
+            Self::Inherit => "inherit".to_string(),
+            Self::Direct => "direct".to_string(),
+            Self::Proxy(url) => format!("proxy:{}", url),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -73,10 +111,13 @@ pub struct UpstreamStreamResponse {
 
 impl UpstreamRuntime {
     pub fn new(config: UpstreamRuntimeConfig) -> Self {
-        let client = build_client(&config).expect("failed to build upstream http client");
+        let default_proxy = preferred_proxy_setting(&config, None)
+            .expect("failed to resolve upstream proxy setting");
+        let client = build_client(&config, &default_proxy).expect("failed to build upstream http client");
         Self {
             config: Arc::new(config),
-            client,
+            default_client: client,
+            proxy_clients: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -117,6 +158,7 @@ impl UpstreamRuntime {
     pub async fn execute_responses(
         &self,
         request: UpstreamRequest,
+        proxy_override: Option<&str>,
     ) -> Result<UpstreamExecutionResult> {
         let provider = self.provider_for_model(&request.model).ok_or_else(|| {
             anyhow!(
@@ -126,8 +168,8 @@ impl UpstreamRuntime {
         })?;
 
         match provider {
-            ProviderKind::OpenAi => self.execute_openai(request).await,
-            ProviderKind::Codex => self.execute_codex(request).await,
+            ProviderKind::OpenAi => self.execute_openai(request, proxy_override).await,
+            ProviderKind::Codex => self.execute_codex(request, proxy_override).await,
             ProviderKind::Mock => bail!("mock provider is not handled by upstream runtime"),
         }
     }
@@ -136,6 +178,7 @@ impl UpstreamRuntime {
         &self,
         auth: &AuthRecord,
         request: UpstreamRequest,
+        proxy_override: Option<&str>,
     ) -> Result<UpstreamExecutionResult> {
         let provider = match auth.provider.trim().to_ascii_lowercase().as_str() {
             "codex" => ProviderKind::Codex,
@@ -144,13 +187,17 @@ impl UpstreamRuntime {
         };
 
         match provider {
-            ProviderKind::Codex => self.execute_codex_with_auth(auth, request).await,
-            ProviderKind::OpenAi => self.execute_openai(request).await,
+            ProviderKind::Codex => self.execute_codex_with_auth(auth, request, proxy_override).await,
+            ProviderKind::OpenAi => self.execute_openai(request, proxy_override).await,
             ProviderKind::Mock => bail!("mock provider is not handled by upstream runtime"),
         }
     }
 
-    async fn execute_openai(&self, request: UpstreamRequest) -> Result<UpstreamExecutionResult> {
+    async fn execute_openai(
+        &self,
+        request: UpstreamRequest,
+        proxy_override: Option<&str>,
+    ) -> Result<UpstreamExecutionResult> {
         let config = self
             .config
             .openai
@@ -165,11 +212,15 @@ impl UpstreamRuntime {
         );
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         apply_transport_headers(&mut headers, request.stream);
-        self.execute_http(ProviderKind::OpenAi, &url, headers, request)
+        self.execute_http(ProviderKind::OpenAi, &url, headers, request, proxy_override)
             .await
     }
 
-    async fn execute_codex(&self, request: UpstreamRequest) -> Result<UpstreamExecutionResult> {
+    async fn execute_codex(
+        &self,
+        request: UpstreamRequest,
+        proxy_override: Option<&str>,
+    ) -> Result<UpstreamExecutionResult> {
         let config = self
             .config
             .codex
@@ -195,7 +246,7 @@ impl UpstreamRuntime {
         }
         apply_transport_headers(&mut headers, request.stream);
         apply_codex_headers(&mut headers, &config.user_agent, None)?;
-        self.execute_http(ProviderKind::Codex, &url, headers, request)
+        self.execute_http(ProviderKind::Codex, &url, headers, request, proxy_override)
             .await
     }
 
@@ -203,6 +254,7 @@ impl UpstreamRuntime {
         &self,
         auth: &AuthRecord,
         request: UpstreamRequest,
+        proxy_override: Option<&str>,
     ) -> Result<UpstreamExecutionResult> {
         let execution = auth
             .execution
@@ -245,7 +297,7 @@ impl UpstreamRuntime {
             &codex_user_agent(execution, config),
             non_empty(Some(execution.account_id.as_str())),
         )?;
-        self.execute_http(ProviderKind::Codex, &url, headers, request)
+        self.execute_http(ProviderKind::Codex, &url, headers, request, proxy_override)
             .await
     }
 
@@ -255,11 +307,12 @@ impl UpstreamRuntime {
         url: &str,
         headers: HeaderMap,
         request: UpstreamRequest,
+        proxy_override: Option<&str>,
     ) -> Result<UpstreamExecutionResult> {
         info!(provider = ?provider, url, stream = request.stream, "dispatching upstream responses request");
 
         let response = self
-            .client
+            .client_for_proxy(proxy_override)?
             .request(Method::POST, url)
             .headers(headers)
             .body(request.body)
@@ -325,26 +378,158 @@ impl UpstreamRuntime {
             }))
         }
     }
+
+    fn client_for_proxy(&self, proxy_override: Option<&str>) -> Result<Client> {
+        let setting = preferred_proxy_setting(&self.config, proxy_override)?;
+        let key = setting.cache_key();
+        if key == "inherit" {
+            return Ok(self.default_client.clone());
+        }
+
+        if let Some(client) = self
+            .proxy_clients
+            .read()
+            .expect("proxy client cache lock poisoned")
+            .get(&key)
+            .cloned()
+        {
+            return Ok(client);
+        }
+
+        let client = build_client(&self.config, &setting)?;
+        self.proxy_clients
+            .write()
+            .expect("proxy client cache lock poisoned")
+            .insert(key, client.clone());
+        Ok(client)
+    }
 }
 
-fn build_client(config: &UpstreamRuntimeConfig) -> Result<Client> {
+fn build_client(config: &UpstreamRuntimeConfig, setting: &ProxySetting) -> Result<Client> {
     let mut builder = Client::builder();
 
-    if let Some(proxy_url) = config.http_proxy.as_deref() {
-        builder = builder.proxy(
-            reqwest::Proxy::http(proxy_url)
-                .with_context(|| format!("invalid upstream http proxy: {proxy_url}"))?,
-        );
+    match setting {
+        ProxySetting::Inherit => {
+            builder = apply_inherited_proxy(builder)?;
+        }
+        ProxySetting::Direct => {
+            builder = builder.no_proxy();
+        }
+        ProxySetting::Proxy(url) => {
+            builder = builder.no_proxy().proxy(
+                reqwest::Proxy::all(url.as_str())
+                    .with_context(|| format!("invalid upstream proxy: {url}"))?,
+            );
+        }
     }
 
-    if let Some(proxy_url) = config.https_proxy.as_deref() {
-        builder = builder.proxy(
-            reqwest::Proxy::https(proxy_url)
-                .with_context(|| format!("invalid upstream https proxy: {proxy_url}"))?,
-        );
+    if matches!(setting, ProxySetting::Inherit)
+        && config.upstream_proxy.as_deref().is_none()
+        && (config.http_proxy.is_some() || config.https_proxy.is_some())
+    {
+        builder = builder.no_proxy();
+        if let Some(proxy_url) = config.http_proxy.as_deref() {
+            builder = builder.proxy(
+                reqwest::Proxy::http(proxy_url)
+                    .with_context(|| format!("invalid upstream http proxy: {proxy_url}"))?,
+            );
+        }
+        if let Some(proxy_url) = config.https_proxy.as_deref() {
+            builder = builder.proxy(
+                reqwest::Proxy::https(proxy_url)
+                    .with_context(|| format!("invalid upstream https proxy: {proxy_url}"))?,
+            );
+        }
     }
 
     builder.build().context("failed to build upstream reqwest client")
+}
+
+fn preferred_proxy_setting(
+    config: &UpstreamRuntimeConfig,
+    proxy_override: Option<&str>,
+) -> Result<ProxySetting> {
+    if let Some(proxy) = proxy_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return ProxySetting::parse(proxy);
+    }
+
+    if let Some(proxy) = config
+        .upstream_proxy
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return ProxySetting::parse(proxy);
+    }
+
+    if config.http_proxy.is_some() || config.https_proxy.is_some() {
+        return Ok(ProxySetting::Inherit);
+    }
+
+    Ok(inherited_proxy_setting())
+}
+
+fn inherited_proxy_setting() -> ProxySetting {
+    if let Some(proxy) = first_env_value(&["ALL_PROXY", "all_proxy"]) {
+        if let Ok(setting) = ProxySetting::parse(&proxy) {
+            return setting;
+        }
+    }
+    ProxySetting::Inherit
+}
+
+fn apply_inherited_proxy(builder: reqwest::ClientBuilder) -> Result<reqwest::ClientBuilder> {
+    let mut builder = builder;
+    if let Some(proxy) = first_env_value(&["ALL_PROXY", "all_proxy"]) {
+        builder = builder.proxy(
+            reqwest::Proxy::all(&proxy)
+                .with_context(|| format!("invalid inherited all_proxy: {proxy}"))?,
+        );
+    }
+
+    if let Some(proxy) = first_env_value(&["HTTP_PROXY", "http_proxy"]) {
+        builder = if is_unified_proxy_scheme(&proxy) {
+            builder.proxy(
+                reqwest::Proxy::all(&proxy)
+                    .with_context(|| format!("invalid inherited http_proxy: {proxy}"))?,
+            )
+        } else {
+            builder.proxy(
+                reqwest::Proxy::http(&proxy)
+                    .with_context(|| format!("invalid inherited http_proxy: {proxy}"))?,
+            )
+        };
+    }
+
+    if let Some(proxy) = first_env_value(&["HTTPS_PROXY", "https_proxy"]) {
+        builder = if is_unified_proxy_scheme(&proxy) {
+            builder.proxy(
+                reqwest::Proxy::all(&proxy)
+                    .with_context(|| format!("invalid inherited https_proxy: {proxy}"))?,
+            )
+        } else {
+            builder.proxy(
+                reqwest::Proxy::https(&proxy)
+                    .with_context(|| format!("invalid inherited https_proxy: {proxy}"))?,
+            )
+        };
+    }
+
+    Ok(builder)
+}
+
+fn first_env_value(keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| env::var(key).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn is_unified_proxy_scheme(raw: &str) -> bool {
+    raw.trim_start().starts_with("socks5://") || raw.trim_start().starts_with("socks5h://")
 }
 
 pub enum UpstreamExecutionResult {
@@ -453,6 +638,7 @@ mod tests {
     #[test]
     fn provider_for_model_prefers_codex_when_model_contains_codex() {
         let runtime = UpstreamRuntime::new(UpstreamRuntimeConfig {
+            upstream_proxy: None,
             http_proxy: None,
             https_proxy: None,
             openai: Some(OpenAiConfig {

@@ -13,6 +13,7 @@ pub async fn run(config: Config) -> Result<()> {
     let snapshot_client = RuntimeConfigClient::new(config.snapshot_client_config()?);
     let upstream_config = config.upstream_runtime_config();
     info!(
+        upstream_proxy = upstream_config.upstream_proxy.as_deref().unwrap_or(""),
         upstream_http_proxy = upstream_config.http_proxy.as_deref().unwrap_or(""),
         upstream_https_proxy = upstream_config.https_proxy.as_deref().unwrap_or(""),
         "upstream proxy config loaded"
@@ -22,11 +23,12 @@ pub async fn run(config: Config) -> Result<()> {
         runtime_state.mark_failed(err.to_string());
         return Err(err);
     }
-    runtime_state.spawn_refresh_loop(snapshot_client);
+    runtime_state.spawn_refresh_loop(snapshot_client.clone());
 
     let listener = TcpListener::bind(config.bind_addr).await?;
     let local_addr = listener.local_addr()?;
-    let app = http::router(runtime_state, upstream_runtime);
+    let app =
+        http::router_with_snapshot_client(runtime_state, upstream_runtime, Some(snapshot_client));
 
     info!(address = %local_addr, "data plane listening");
 

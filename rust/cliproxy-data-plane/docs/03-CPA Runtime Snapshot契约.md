@@ -14,6 +14,7 @@ Rust 不应直接消费 Go 的完整内部配置，而应消费一份已经规�
 - 向 Rust 提供启用的路由信息
 - 向 Rust 提供 provider、model、auth 的运行时索引基础数据
 - 向 Rust 提供 routing 与 session affinity 配置
+- 向 Rust 提供上游出站代理等网络执行策略
 - 向 Rust 提供 usage queue 和 feature flag 等数据平面执行参数
 
 这份 snapshot 不负责：
@@ -37,6 +38,7 @@ Rust 不应直接消费 Go 的完整内部配置，而应消费一份已经规�
 - `model_aliases`
 - `models`
 - `auth_pool`
+- `network`
 - `usage_queue`
 - `feature_flags`
 
@@ -132,7 +134,50 @@ Rust 不应直接消费 Go 的完整内部配置，而应消费一份已经规�
 - `enabled`
 - `backend`
 
-### 4.10 feature_flags
+### 4.10 network
+
+用于描述 Rust 数据平面访问外部上游时的默认网络策略。
+
+首期建议字段：
+
+- `upstream_proxy`
+  - Go 下发给 Rust 的默认上游代理策略
+  - 仅作用于 `Rust -> Provider` 的外部请求
+  - 不作用于 `Go <-> Rust` 本地通信
+
+`upstream_proxy` 的语义建议固定为以下 3 类：
+
+1. 空字符串
+   - `inherit`
+   - 表示不在 snapshot 中显式指定代理
+   - Rust 可退回到本地 CLI / env / 运行时默认行为
+
+2. `direct`
+   - 强制直连
+   - 明确禁止对上游请求使用任何代理
+
+3. 显式代理 URL
+   - 例如 `http://127.0.0.1:7897`
+   - 例如 `https://proxy.example.com:8443`
+   - 例如 `socks5://127.0.0.1:7897`
+   - 例如 `socks5h://127.0.0.1:7897`
+
+补充约束：
+
+- `Go -> Rust`
+- `Rust -> Go`
+
+这两类本地控制面通信不应使用 `upstream_proxy`。
+
+也就是说：
+
+- `GET /v0/management/runtime-snapshot`
+- Go 转发 `POST /v1/responses` 到 Rust
+- Go 探活 Rust `/healthz`、`/readyz`
+
+都必须保持 loopback / 内网直连，不应被全局出口代理劫持。
+
+### 4.11 feature_flags
 
 用于做数据平面内部能力开关，例如：
 
@@ -194,6 +239,9 @@ Rust 不应直接消费 Go 的完整内部配置，而应消费一份已经规�
       "cooldown_until": null
     }
   ],
+  "network": {
+    "upstream_proxy": "socks5://127.0.0.1:7897"
+  },
   "usage_queue": {
     "enabled": true,
     "backend": "redis"
@@ -214,6 +262,25 @@ Rust 侧应遵循这些规则：
 - 新请求使用最新成功应用的 snapshot
 - 若从未成功加载有效 snapshot，应保持 fail closed
 - 若已经成功加载过 snapshot，后续刷新失败时应进入 degraded 而不是立即不可用
+
+Rust 对 `network.upstream_proxy` 还应遵循以下规则：
+
+- 仅将其用于访问外部 provider 的请求
+- 支持的代理协议至少包括：
+  - `http`
+  - `https`
+  - `socks5`
+  - `socks5h`
+- `direct` 表示显式关闭代理
+- 空值表示 `inherit`
+- `inherit` 不是“继承 Go 代理对象”，而是“允许 Rust 退回到自身运行时默认配置来源”
+
+首期建议的 Rust 侧优先级：
+
+1. Rust 显式 CLI 参数
+2. Rust 显式环境变量
+3. snapshot `network.upstream_proxy`
+4. 空值 / 默认行为
 
 ## 7. 里程碑 0 与里程碑 1 的边界
 

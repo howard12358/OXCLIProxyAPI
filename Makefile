@@ -9,6 +9,7 @@ SNAPSHOT_URL ?= http://$(GO_ADDR)/v0/management/runtime-snapshot
 RUST_BIND_ADDR ?= 127.0.0.1:4100
 RUST_READY_URL ?= http://$(RUST_BIND_ADDR)/readyz
 RUST_DIR ?= rust/cliproxy-data-plane
+UPSTREAM_PROXY ?=
 UPSTREAM_HTTP_PROXY ?=
 UPSTREAM_HTTPS_PROXY ?=
 
@@ -18,8 +19,11 @@ GO_LOG_FILE ?= $(TMP_DIR)/dev-go.log
 RUST_PID_FILE ?= $(TMP_DIR)/dev-rust.pid
 RUST_LOG_FILE ?= $(TMP_DIR)/dev-rust.log
 SNAPSHOT_FILE ?= $(TMP_DIR)/cpa-runtime-snapshot.dev.json
+SNAPSHOT_CURRENT_FILE ?= $(TMP_DIR)/cpa-runtime-snapshot.current.json
+RUST_SNAPSHOT_URL ?= http://$(RUST_BIND_ADDR)/v0/runtime/snapshot
+RUST_SNAPSHOT_FILE ?= $(TMP_DIR)/rs-runtime-snapshot.current.json
 
-.PHONY: help dev-stack stop-stack restart-stack status-stack ps-stack kill-stack-orphans logs-stack logs-go logs-rust snapshot-stack test-responses
+.PHONY: help dev-stack dev-stack-url stop-stack restart-stack status-stack ps-stack kill-stack-orphans logs-stack logs-go logs-rust snapshot-stack snapshot-current snapshot-rs diff-snapshots test-responses
 
 help:
 	@printf "%s\n" \
@@ -35,6 +39,9 @@ help:
 	"  make logs-go        持续跟踪 Go 日志" \
 	"  make logs-rust      持续跟踪 Rust 日志" \
 	"  make snapshot-stack 重新导出本地 snapshot 文件" \
+	"  make snapshot-current 拉取当前 Go 管理面的原始 snapshot 到文件" \
+	"  make snapshot-rs    拉取当前 Rust 数据面已应用的 snapshot 到文件" \
+	"  make diff-snapshots 拉取 Go/Rust 当前 snapshot 并输出差异" \
 	"  make test-responses 调用 Rust /v1/responses 测试接口" \
 	"" \
 	"可选变量：" \
@@ -42,6 +49,9 @@ help:
 	"  MANAGEMENT_KEY=<key>    默认 $(MANAGEMENT_KEY)" \
 	"  GO_ADDR=<host:port>     默认 $(GO_ADDR)" \
 	"  RUST_BIND_ADDR=<addr>   默认 $(RUST_BIND_ADDR)" \
+	"  SNAPSHOT_CURRENT_FILE=<path> 默认 $(SNAPSHOT_CURRENT_FILE)" \
+	"  RUST_SNAPSHOT_FILE=<path> 默认 $(RUST_SNAPSHOT_FILE)" \
+	"  UPSTREAM_PROXY=<url|direct>  例如 socks5h://127.0.0.1:7897" \
 	"  UPSTREAM_HTTP_PROXY=<url>  例如 http://127.0.0.1:7897" \
 	"  UPSTREAM_HTTPS_PROXY=<url>  例如 http://127.0.0.1:7897"
 
@@ -64,7 +74,7 @@ dev-stack:
 	$(MAKE) snapshot-stack >/dev/null; \
 	echo "启动 Rust 数据平面..."; \
 	nohup env http_proxy="$${http_proxy-}" https_proxy="$${https_proxy-}" HTTP_PROXY="$${HTTP_PROXY-}" HTTPS_PROXY="$${HTTPS_PROXY-}" all_proxy= ALL_PROXY= \
-		CLIPROXY_UPSTREAM_HTTP_PROXY="$(UPSTREAM_HTTP_PROXY)" CLIPROXY_UPSTREAM_HTTPS_PROXY="$(UPSTREAM_HTTPS_PROXY)" \
+		CLIPROXY_UPSTREAM_PROXY="$(UPSTREAM_PROXY)" CLIPROXY_UPSTREAM_HTTP_PROXY="$(UPSTREAM_HTTP_PROXY)" CLIPROXY_UPSTREAM_HTTPS_PROXY="$(UPSTREAM_HTTPS_PROXY)" \
 		cargo run --manifest-path "$(RUST_DIR)/Cargo.toml" -- --bind-addr "$(RUST_BIND_ADDR)" --snapshot-file "$(SNAPSHOT_FILE)" \
 		>"$(RUST_LOG_FILE)" 2>&1 & echo $$! >"$(RUST_PID_FILE)"; \
 	for i in $$(seq 1 30); do \
@@ -99,7 +109,7 @@ dev-stack-url:
 	done; \
 	echo "启动 Rust 数据平面（snapshot-url 模式）..."; \
 	nohup env http_proxy="$${http_proxy-}" https_proxy="$${https_proxy-}" HTTP_PROXY="$${HTTP_PROXY-}" HTTPS_PROXY="$${HTTPS_PROXY-}" all_proxy= ALL_PROXY= \
-		CLIPROXY_UPSTREAM_HTTP_PROXY="$(UPSTREAM_HTTP_PROXY)" CLIPROXY_UPSTREAM_HTTPS_PROXY="$(UPSTREAM_HTTPS_PROXY)" \
+		CLIPROXY_UPSTREAM_PROXY="$(UPSTREAM_PROXY)" CLIPROXY_UPSTREAM_HTTP_PROXY="$(UPSTREAM_HTTP_PROXY)" CLIPROXY_UPSTREAM_HTTPS_PROXY="$(UPSTREAM_HTTPS_PROXY)" \
 		cargo run --manifest-path "$(RUST_DIR)/Cargo.toml" -- --bind-addr "$(RUST_BIND_ADDR)" --snapshot-url "$(SNAPSHOT_URL)" --snapshot-bearer-token "$(MANAGEMENT_KEY)" \
 		>"$(RUST_LOG_FILE)" 2>&1 & echo $$! >"$(RUST_PID_FILE)"; \
 	for i in $$(seq 1 30); do \
@@ -123,6 +133,29 @@ snapshot-stack:
 		-H "Authorization: Bearer $(MANAGEMENT_KEY)" \
 		-o "$(SNAPSHOT_FILE)"; \
 	python3 -c 'import json, pathlib; path = pathlib.Path("$(SNAPSHOT_FILE)"); data = json.loads(path.read_text()); data.setdefault("listeners", {})["public_http"] = "http://$(RUST_BIND_ADDR)"; path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n"); print(path)'
+
+snapshot-current:
+	@set -euo pipefail; \
+	mkdir -p "$(dir $(SNAPSHOT_CURRENT_FILE))"; \
+	curl -sf "$(SNAPSHOT_URL)" \
+		-H "Authorization: Bearer $(MANAGEMENT_KEY)" \
+		-o "$(SNAPSHOT_CURRENT_FILE)"; \
+	python3 -c 'import json, pathlib; path = pathlib.Path("$(SNAPSHOT_CURRENT_FILE)"); data = json.loads(path.read_text()); path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n"); print(path)'
+
+snapshot-rs:
+	@set -euo pipefail; \
+	mkdir -p "$(dir $(RUST_SNAPSHOT_FILE))"; \
+	curl -sf "$(RUST_SNAPSHOT_URL)" \
+		-o "$(RUST_SNAPSHOT_FILE)"; \
+	python3 -c 'import json, pathlib; path = pathlib.Path("$(RUST_SNAPSHOT_FILE)"); data = json.loads(path.read_text()); path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n"); print(path)'
+
+diff-snapshots:
+	@set -euo pipefail; \
+	$(MAKE) snapshot-current >/dev/null; \
+	$(MAKE) snapshot-rs >/dev/null; \
+	echo "Go snapshot:   $(SNAPSHOT_CURRENT_FILE)"; \
+	echo "Rust snapshot: $(RUST_SNAPSHOT_FILE)"; \
+	python3 -c 'import difflib, pathlib, sys; go = pathlib.Path("$(SNAPSHOT_CURRENT_FILE)").read_text().splitlines(); rs = pathlib.Path("$(RUST_SNAPSHOT_FILE)").read_text().splitlines(); diff = list(difflib.unified_diff(go, rs, fromfile="$(SNAPSHOT_CURRENT_FILE)", tofile="$(RUST_SNAPSHOT_FILE)", lineterm="")); print("\n".join(diff) if diff else "No differences.")'
 
 stop-stack:
 	@set -euo pipefail; \

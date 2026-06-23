@@ -213,6 +213,7 @@ async fn execute_real_upstream(
         execution_plan,
         selected_auth,
         &upstream_request_template,
+        snapshot.network.upstream_proxy.as_deref(),
     )
     .await?;
 
@@ -262,13 +263,14 @@ async fn execute_upstream_with_retries(
     execution_plan: &ExecutionPlan,
     selected_auth: Option<&AuthRecord>,
     request: &UpstreamRequest,
+    proxy_override: Option<&str>,
 ) -> Result<UpstreamExecutionResult> {
     if let Some(auth) = selected_auth {
         if upstream.can_execute_for_auth(auth) {
             let mut last_error = None;
             for candidate in auth_retry_chain(snapshot, execution_plan, auth) {
                 match upstream
-                    .execute_responses_for_auth(&candidate, request.clone())
+                    .execute_responses_for_auth(&candidate, request.clone(), proxy_override)
                     .await
                 {
                     Ok(response) => return Ok(response),
@@ -288,11 +290,15 @@ async fn execute_upstream_with_retries(
                 return Err(err);
             }
         } else {
-            return upstream.execute_responses(request.clone()).await;
+            return upstream
+                .execute_responses(request.clone(), proxy_override)
+                .await;
         }
     }
 
-    upstream.execute_responses(request.clone()).await
+    upstream
+        .execute_responses(request.clone(), proxy_override)
+        .await
 }
 
 fn auth_retry_chain(
@@ -313,8 +319,15 @@ fn should_retry_auth_bound_error(err: &anyhow::Error) -> bool {
     let message = err.to_string().to_ascii_lowercase();
     message.contains("upstream codex error 401")
         || message.contains("upstream codex error 403")
+        || is_codex_quota_exhaustion_error(&message)
         || message.contains("account_deactivated")
         || message.contains("invalid_api_key")
+}
+
+fn is_codex_quota_exhaustion_error(message: &str) -> bool {
+    message.contains("upstream codex error 429")
+        && (message.contains("usage_limit_reached")
+            || message.contains("the usage limit has been reached"))
 }
 
 fn log_upstream_failure(err: &anyhow::Error, execution_plan: &ExecutionPlan) {
@@ -983,5 +996,19 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("req_123")
         );
+    }
+
+    #[test]
+    fn should_retry_auth_bound_error_accepts_codex_quota_exhaustion() {
+        let err = anyhow!(
+            "upstream codex error 429: {{\"error\":{{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\"}}}}"
+        );
+        assert!(should_retry_auth_bound_error(&err));
+    }
+
+    #[test]
+    fn should_retry_auth_bound_error_rejects_generic_429() {
+        let err = anyhow!("upstream codex error 429: too many requests");
+        assert!(!should_retry_auth_bound_error(&err));
     }
 }

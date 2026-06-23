@@ -50,7 +50,10 @@ impl RuntimeConfigClient {
     pub fn new(config: RuntimeConfigClientConfig) -> Self {
         Self {
             config,
-            http_client: Client::new(),
+            http_client: Client::builder()
+                .no_proxy()
+                .build()
+                .expect("build runtime config client"),
         }
     }
 
@@ -229,6 +232,9 @@ mod tests {
               "cooldown_until": null
             }
           ],
+          "network": {
+            "upstream_proxy": "socks5h://127.0.0.1:7897"
+          },
           "usage_queue": {
             "enabled": true,
             "backend": "redis"
@@ -253,5 +259,16 @@ mod tests {
         assert!(!snapshot_changed(Some("v1"), "v1"));
         assert!(snapshot_changed(Some("v1"), "v2"));
         assert!(snapshot_changed(None, "v1"));
+    }
+
+    #[test]
+    fn validate_snapshot_accepts_network_upstream_proxy() {
+        let snapshot: RuntimeSnapshot =
+            serde_json::from_str(valid_snapshot_json()).expect("parse snapshot");
+        validate_snapshot(&snapshot).expect("validation should pass");
+        assert_eq!(
+            snapshot.network.upstream_proxy.as_deref(),
+            Some("socks5h://127.0.0.1:7897")
+        );
     }
 }

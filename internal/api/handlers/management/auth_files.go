@@ -1200,9 +1200,15 @@ func (h *Handler) upsertAuthRecord(ctx context.Context, auth *coreauth.Auth) err
 	if existing, ok := h.authManager.GetByID(auth.ID); ok {
 		auth.CreatedAt = existing.CreatedAt
 		_, err := h.authManager.Update(ctx, auth)
+		if err == nil {
+			h.notifySnapshotIfChanged(ctx)
+		}
 		return err
 	}
 	_, err := h.authManager.Register(ctx, auth)
+	if err == nil {
+		h.notifySnapshotIfChanged(ctx)
+	}
 	return err
 }
 
@@ -1299,6 +1305,7 @@ func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", err)})
 		return
 	}
+	h.notifySnapshotIfChanged(ctx)
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "disabled": *req.Disabled})
 }
@@ -1399,6 +1406,7 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", err)})
 		return
 	}
+	h.notifySnapshotIfChanged(ctx)
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
@@ -1675,6 +1683,7 @@ func (h *Handler) removeAuth(ctx context.Context, id string) {
 	}
 	if _, ok := h.authManager.GetByID(id); ok {
 		h.authManager.Remove(ctx, id)
+		h.notifySnapshotIfChanged(ctx)
 		return
 	}
 	authID := h.authIDForPath(id)
@@ -1682,6 +1691,7 @@ func (h *Handler) removeAuth(ctx context.Context, id string) {
 		return
 	}
 	h.authManager.Remove(ctx, authID)
+	h.notifySnapshotIfChanged(ctx)
 }
 
 func (h *Handler) deleteTokenRecord(ctx context.Context, path string) error {
@@ -1734,6 +1744,7 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
 			return savedPath, fmt.Errorf("post-auth persist hook failed: %w", errHook)
 		}
 	}
+	h.notifySnapshotIfChanged(ctx)
 	return savedPath, nil
 }
 

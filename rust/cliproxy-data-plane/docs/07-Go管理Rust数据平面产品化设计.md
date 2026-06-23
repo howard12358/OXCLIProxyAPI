@@ -43,6 +43,8 @@
 - Rust 失败时，Go 不能自动摘流量
 - 未来扩到多 Rust 实例时，无法做基础调度
 - 观测面缺少“请求命中了哪个 Rust 实例”的管理语义
+- Go 与 Rust 的上游代理策略仍是分裂配置，缺少统一下发
+- Rust 当前只靠定时轮询 snapshot，配置变更不能低延迟生效
 
 ## 3. 产品化目标
 
@@ -56,6 +58,8 @@
 4. Go 能基于实例状态做 `/v1/responses` 流量转发
 5. Go 能在实例不健康时自动摘流量
 6. Rust 继续通过 snapshot 消费 Go 的运行时配置
+7. Go 能通过 snapshot 向 Rust 下发默认上游代理策略
+8. Go 能在 snapshot 语义变化时通知 Rust 立即刷新配置
 
 ### 3.2 首期范围
 
@@ -73,6 +77,8 @@
 - WebSocket 型 provider 数据面
 - 多管理平面选主
 - 自动实例拉起与进程编排
+- Go 与 Rust 之间的本地控制面通信代理编排
+- Go 直接向 Rust 推送整份运行时配置正文
 
 ## 4. 设计原则
 
@@ -81,6 +87,9 @@
 - 优先增加新层，不打碎旧 Go 处理链路
 - 所有接管点都必须具备快速回退路径
 - 产品化第一版优先正确性与可观测性，不先追求复杂调度
+- 本地控制面链路与外部上游链路必须分开建模
+- snapshot 仍然是 Rust 运行时配置的唯一事实来源
+- 推送通道只负责“变更通知”，不承载完整配置正文
 
 ## 5. 目标架构
 
@@ -105,6 +114,9 @@ flowchart TD
     RustB -->|register / heartbeat| Go
     RustA -->|pull runtime snapshot| Go
     RustB -->|pull runtime snapshot| Go
+
+    RustA -.->|本地直连| Go
+    RustB -.->|本地直连| Go
 ```
 
 ## 6. 关键设计
@@ -178,7 +190,290 @@ Rust 的运行时配置消费链路继续保留：
 - 对 Rust 生命周期耦合较低
 - 更适合首版产品化快速收敛
 
-### 6.5 Go 侧 `/v1/responses` 动态转发
+### 6.5 在轮询基础上补充实时推送
+
+仅靠 Rust 定时轮询 snapshot，虽然实现简单，但存在两个明显问题：
+
+- 配置生效延迟受轮询间隔影响
+- 大规模实例场景下，纯轮询会带来不必要的控制面噪音
+
+因此建议在保留轮询兜底的前提下，增加一条轻量实时推送链路。
+
+这条链路的职责不是“推送配置正文”，而是：
+
+- Go 判定 snapshot 语义发生变化
+- Go 向相关 Rust 实例发送“有新 snapshot 版本”的通知
+- Rust 收到通知后立即重新拉取 snapshot
+- Rust 原子应用新 snapshot
+
+也就是：
+
+- `push` 负责通知
+- `pull` 负责取数
+- `snapshot` 负责承载完整配置事实
+
+这样做的好处是：
+
+- 不需要维护第二套配置协议
+- Rust 断线恢复后只要重新拉取 snapshot 即可追平状态
+- Go 与 Rust 仍然围绕一个 `snapshot_version` 对齐
+- 推送失败时仍可退回定时轮询，不影响正确性
+
+### 6.6 哪些情况触发实时推送
+
+实时推送的判定标准不应是“配置文件发生修改”，而应是：
+
+`当前有效 runtime snapshot 的语义是否发生变化。`
+
+也就是只要重新构建出的 snapshot 内容变化，并导致 `snapshot_version` 变化，就应触发推送。
+
+建议触发源至少包括：
+
+1. 全局上游代理变化
+   - `proxy-url`
+   - 会影响 `Rust -> Provider`
+
+2. 路由能力变化
+   - `routes.responses`
+   - 未来若有 `chat_completions`、`messages` 等路由位也同理
+
+3. 路由策略变化
+   - `routing.strategy`
+   - `routing.session_affinity`
+   - `routing.session_ttl_seconds`
+
+4. provider 状态变化
+   - 某 provider 的 `enabled` 状态变化
+
+5. model 能力变化
+   - `model_aliases`
+   - `models`
+
+6. auth pool 变化
+   - auth 新增、删除、禁用、恢复
+   - auth 支持模型变化
+   - auth labels / priority / cooldown 变化
+   - token 刷新后 execution 数据变化
+
+7. listeners / feature flags / usage queue / network 等 snapshot 字段变化
+   - 前提是这些字段已经被 Rust 运行时消费，或预期会被消费
+
+不建议把“原始配置文件有改动但 snapshot 结果未变”也视作推送事件。
+
+例如：
+
+- 注释变化
+- 无关字段顺序变化
+- 只影响 Go 本身、不影响 Rust 运行时决策的配置变化
+
+这类变化不应触发 push。
+
+### 6.7 哪些变化不应走 snapshot 实时推送
+
+以下信息不适合放进 snapshot push 机制：
+
+- 单次请求级临时参数
+- 人工临时摘流量命令
+- `drain`、`resume`、`shutdown` 这类实例控制指令
+- 诊断类或展示类临时状态
+
+原因是这些内容更像“控制命令”而不是“运行时配置事实”。
+
+建议拆分为两类：
+
+1. 配置事实
+   - 走 `runtime snapshot`
+   - 由 Go 生成版本
+   - 由 Rust 拉取并原子应用
+
+2. 控制命令
+   - 走独立 control-plane API 或事件通道
+   - 明确 request / ack / retry / timeout 语义
+
+### 6.8 实时推送建议模型
+
+建议 Go 与 Rust 之间新增一条极简通知接口，例如：
+
+```text
+POST /v0/runtime/snapshot-notify
+```
+
+请求体建议只包含：
+
+```json
+{
+  "version": "sha256:...",
+  "generated_at": "2026-06-22T09:00:00Z",
+  "reason": "runtime_snapshot_changed"
+}
+```
+
+Rust 收到后不直接使用请求体中的配置内容，而是立即执行：
+
+```text
+GET /v0/management/runtime-snapshot
+```
+
+然后按现有流程：
+
+1. 比较当前 `snapshot_version`
+2. 若版本变化则应用新 snapshot
+3. 若版本未变化则忽略
+
+建议 Rust 对通知请求返回：
+
+- `202 Accepted`
+  - 表示“已接收刷新通知，将异步拉取”
+
+而不是等待拉取与应用完成后再同步返回。
+
+这样可以避免：
+
+- Go 被单个 Rust 实例的拉取耗时阻塞
+- 通知接口承担过多同步语义
+
+### 6.9 轮询与推送并存策略
+
+实时推送不能替代轮询，二者应并存：
+
+1. 推送负责低延迟
+   - 配置改动后尽快通知 Rust 刷新
+
+2. 轮询负责兜底
+   - Rust 漏掉通知
+   - Go 推送失败
+   - Rust 实例重启后未收到旧事件
+   - 临时网络抖动
+
+推荐语义：
+
+- Rust 继续保留当前 snapshot poll loop
+- Go 在 snapshot 版本变化时，额外触发一次 notify fan-out
+- Rust 任何时候都以最新拉到的 snapshot 为准
+
+推荐时序：
+
+```mermaid
+sequenceDiagram
+    participant UI as Frontend / API
+    participant Go as Go CPA
+    participant Rust as Rust Data Plane
+
+    UI->>Go: Update config/auth state
+    Go->>Go: Rebuild runtime snapshot
+    Go->>Go: snapshot_version changed
+    Go->>Rust: POST /v0/runtime/snapshot-notify
+    Rust-->>Go: 202 Accepted
+    Rust->>Go: GET /v0/management/runtime-snapshot
+    Go-->>Rust: latest snapshot
+    Rust->>Rust: apply snapshot atomically
+```
+
+### 6.10 Go 侧推送触发点建议
+
+Go 内部不应在“任何管理 API 被调用”时都盲目推送。
+
+更合理的触发方式是：
+
+1. 变更先落到当前有效配置 / auth 状态
+2. Go 重新构建 snapshot
+3. 比较新旧 `snapshot_version`
+4. 只有版本变化时，才向活跃 Rust 实例推送 notify
+
+因此推送触发点通常会落在以下事件之后：
+
+- 管理面配置保存成功
+- auth 文件或 auth 内存状态变化
+- token refresh 导致 auth execution 变化
+- watcher/synthesizer 完成一次有效重建
+
+这一设计可以避免：
+
+- 重复推送
+- 无效推送
+- 把“文件变化”错误等同于“运行时配置变化”
+
+### 6.11 Go 通过 snapshot 下发默认上游代理
+
+Go 当前已有 `proxy-url`，它本质上是 Go 进程自己的默认出站代理。
+
+产品化后，Rust 不应再只靠独立环境变量手工配置代理，而应能消费 Go 下发的默认上游代理策略。
+
+首期建议：
+
+- 在 `runtime snapshot` 中新增 `network.upstream_proxy`
+- 由 Go 从当前有效配置中的 `proxy-url` 导出
+- Rust 在应用 snapshot 时同步更新默认 upstream proxy 语义
+
+这项设计只作用于：
+
+- `Rust -> Provider`
+
+不作用于：
+
+- `Rust -> Go`
+- `Go -> Rust`
+
+即：
+
+- Rust 拉取 snapshot
+- Go 向 Rust 转发 `/v1/responses`
+- Go 探测 Rust 健康状态
+
+都必须保持本地直连，不走代理。
+
+### 6.12 统一代理语义
+
+Go 与 Rust 应统一使用同一套代理语义，避免一个支持 `socks5`、另一个只支持 `http` 的行为分叉。
+
+建议支持以下取值：
+
+1. 空值
+   - `inherit`
+   - 表示未显式指定代理，允许进程退回到自身运行时默认配置
+
+2. `direct`
+   - 强制直连
+   - 明确禁止请求走任何代理
+
+3. 显式代理 URL
+   - `http://...`
+   - `https://...`
+   - `socks5://...`
+   - `socks5h://...`
+
+其中：
+
+- `inherit` 不是“Rust 自动继承 Go 的 client 实例”
+- 而是“Rust 允许使用它自己的配置优先级回退链”
+
+Rust 的建议优先级：
+
+1. Rust CLI 参数
+2. Rust 环境变量
+3. snapshot `network.upstream_proxy`
+4. 空值 / 默认行为
+
+### 6.13 Rust 补齐 socks5 / socks5h
+
+当前 Go 已支持 `http(s)`、`socks5`、`socks5h` 和 `direct` 语义。
+
+Rust 首期产品化应补齐：
+
+- `http`
+- `https`
+- `socks5`
+- `socks5h`
+- `direct`
+- `inherit`
+
+这样可以保证：
+
+- 本地开发通过 Clash / Surge / socks5 代理时，Go 与 Rust 行为一致
+- 管理面只需要维护一套代理策略语义
+- 真实上游联调不再依赖手工为 Go / Rust 分别传不同环境变量
+
+### 6.14 Go 侧 `/v1/responses` 动态转发
 
 Go 不再只依赖单个 `data-plane.responses-base-url`，而是：
 
@@ -198,7 +493,7 @@ Go 不再只依赖单个 `data-plane.responses-base-url`，而是：
 - draining
 - 错误熔断
 
-### 6.6 摘流量与回退
+### 6.15 摘流量与回退
 
 Go 必须具备最小摘流量能力。
 
@@ -489,4 +784,3 @@ CLIPROXY_HEARTBEAT_SECONDS
 4. Go 基于实例表做 `/v1/responses` 动态转发
 
 这样做之后，当前这套 Rust 数据平面才真正从“联调 sidecar”变成“受 Go 管理的产品化数据平面实例”。
-

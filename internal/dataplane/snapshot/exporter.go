@@ -35,6 +35,7 @@ type RuntimeSnapshot struct {
 	ModelAliases     map[string]map[string]string `json:"model_aliases"`
 	Models           map[string][]string          `json:"models"`
 	AuthPool         []AuthRecord                 `json:"auth_pool"`
+	Network          NetworkConfig                `json:"network"`
 	UsageQueue       UsageQueueConfig             `json:"usage_queue"`
 	FeatureFlags     map[string]bool              `json:"feature_flags"`
 }
@@ -88,6 +89,10 @@ type UsageQueueConfig struct {
 	Backend string `json:"backend"`
 }
 
+type NetworkConfig struct {
+	UpstreamProxy string `json:"upstream_proxy"`
+}
+
 func BuildRuntimeSnapshot(cfg *config.Config, authManager *coreauth.Manager, now time.Time) RuntimeSnapshot {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -127,6 +132,9 @@ func BuildRuntimeSnapshot(cfg *config.Config, authManager *coreauth.Manager, now
 		Models: map[string][]string{
 			providerCodex: models,
 		},
+		Network: NetworkConfig{
+			UpstreamProxy: strings.TrimSpace(proxyURL(cfg)),
+		},
 		AuthPool:     exportedAuths,
 		UsageQueue:   UsageQueueConfig{},
 		FeatureFlags: map[string]bool{},
@@ -140,6 +148,13 @@ func dataPlanePublicHTTP(cfg *config.Config) string {
 		return ""
 	}
 	return strings.TrimSpace(cfg.DataPlane.ResponsesBaseURL)
+}
+
+func proxyURL(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.ProxyURL)
 }
 
 func buildCodexAuthPool(cfg *config.Config, authManager *coreauth.Manager, now time.Time) []AuthRecord {
@@ -337,6 +352,7 @@ func buildSnapshotVersion(snapshot RuntimeSnapshot) string {
 		ModelAliases map[string]map[string]string `json:"model_aliases"`
 		Models       map[string][]string          `json:"models"`
 		AuthPool     []AuthRecord                 `json:"auth_pool"`
+		Network      NetworkConfig                `json:"network"`
 		UsageQueue   UsageQueueConfig             `json:"usage_queue"`
 		FeatureFlags map[string]bool              `json:"feature_flags"`
 	}{
@@ -347,6 +363,7 @@ func buildSnapshotVersion(snapshot RuntimeSnapshot) string {
 		ModelAliases: snapshot.ModelAliases,
 		Models:       snapshot.Models,
 		AuthPool:     snapshot.AuthPool,
+		Network:      snapshot.Network,
 		UsageQueue:   snapshot.UsageQueue,
 		FeatureFlags: snapshot.FeatureFlags,
 	}

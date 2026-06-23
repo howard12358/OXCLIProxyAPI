@@ -54,6 +54,7 @@ type Handler struct {
 	logDir                  string
 	postAuthHook            coreauth.PostAuthHook
 	postAuthPersistHook     coreauth.PostAuthHook
+	snapshotNotifier        snapshotNotifier
 	pluginHost              *pluginhost.Host
 	configReloadHook        func(context.Context, *config.Config)
 	pluginStoreRegistryURL  string
@@ -65,6 +66,10 @@ type Handler struct {
 type configReloadSnapshot struct {
 	cfg        *config.Config
 	generation uint64
+}
+
+type snapshotNotifier interface {
+	NotifyIfChanged(context.Context, *config.Config, *coreauth.Manager) error
 }
 
 // NewHandler creates a new management handler instance.
@@ -150,6 +155,16 @@ func (h *Handler) SetPluginHost(host *pluginhost.Host) {
 	h.mu.Unlock()
 }
 
+// SetSnapshotNotifier updates the notifier used to fan out snapshot change notifications.
+func (h *Handler) SetSnapshotNotifier(notifier snapshotNotifier) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.snapshotNotifier = notifier
+	h.mu.Unlock()
+}
+
 // SetConfigReloadHook updates the callback used after management saves config changes.
 func (h *Handler) SetConfigReloadHook(hook func(context.Context, *config.Config)) {
 	if h == nil {
@@ -180,7 +195,9 @@ func (h *Handler) saveConfigAndSnapshotLocked(c *gin.Context) (configReloadSnaps
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save config: %v", errSave)})
 		return configReloadSnapshot{}, false
 	}
-	return h.reloadSnapshotConfigLocked(), true
+	cfgSnapshot := h.reloadSnapshotConfigLocked()
+	h.notifySnapshotIfChangedLocked(c.Request.Context(), cfgSnapshot.cfg, h.authManager)
+	return cfgSnapshot, true
 }
 
 // reloadConfigAfterManagementSave reloads from an independent config snapshot.
@@ -412,7 +429,35 @@ func (h *Handler) persistLocked(c *gin.Context) bool {
 		return false
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	h.notifySnapshotIfChangedLocked(c.Request.Context(), h.cfg.CloneForRuntime(), h.authManager)
 	return true
+}
+
+func (h *Handler) notifySnapshotIfChanged(ctx context.Context) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	cfg := h.cfg.CloneForRuntime()
+	manager := h.authManager
+	h.notifySnapshotIfChangedLocked(ctx, cfg, manager)
+	h.mu.Unlock()
+}
+
+func (h *Handler) notifySnapshotIfChangedLocked(ctx context.Context, cfg *config.Config, manager *coreauth.Manager) {
+	if h == nil || cfg == nil || h.snapshotNotifier == nil {
+		return
+	}
+	notifier := h.snapshotNotifier
+	notifyCtx := context.Background()
+	if ctx != nil {
+		notifyCtx = context.WithoutCancel(ctx)
+	}
+	go func() {
+		if err := notifier.NotifyIfChanged(notifyCtx, cfg, manager); err != nil {
+			log.WithError(err).Debug("management: snapshot notify failed")
+		}
+	}()
 }
 
 // Helper methods for simple types
