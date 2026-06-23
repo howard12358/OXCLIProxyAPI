@@ -402,8 +402,56 @@ type PayloadModelRule struct {
 
 // DataPlaneConfig configures optional Rust data plane routing.
 type DataPlaneConfig struct {
+	// Mode controls how the Rust data plane is connected.
+	// Supported values:
+	// - "embedded": Go supervises a local Rust child process
+	// - "external": Go connects to an externally managed Rust data plane
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
+
 	// ResponsesBaseURL routes POST /v1/responses traffic to the Rust sidecar when set.
 	ResponsesBaseURL string `yaml:"responses-base-url" json:"responses-base-url"`
+
+	// Embedded configures the optional local Rust child process mode.
+	Embedded EmbeddedDataPlaneConfig `yaml:"embedded,omitempty" json:"embedded,omitempty"`
+
+	// RuntimeResponsesBaseURL is a runtime-only override used when the effective data plane
+	// target is discovered or managed dynamically by the Go process.
+	RuntimeResponsesBaseURL string `yaml:"-" json:"-"`
+}
+
+// EmbeddedDataPlaneConfig configures the local Rust child process mode.
+type EmbeddedDataPlaneConfig struct {
+	Enabled               bool   `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	BindAddr              string `yaml:"bind-addr,omitempty" json:"bind-addr,omitempty"`
+	StateDir              string `yaml:"state-dir,omitempty" json:"state-dir,omitempty"`
+	LogLevel              string `yaml:"log-level,omitempty" json:"log-level,omitempty"`
+	ExtractPolicy         string `yaml:"extract-policy,omitempty" json:"extract-policy,omitempty"`
+	StartupTimeoutSeconds int    `yaml:"startup-timeout-seconds,omitempty" json:"startup-timeout-seconds,omitempty"`
+}
+
+// EffectiveMode resolves the runtime data-plane mode while preserving legacy configuration
+// behavior when only responses-base-url is configured.
+func (cfg DataPlaneConfig) EffectiveMode() string {
+	mode := strings.ToLower(strings.TrimSpace(cfg.Mode))
+	switch mode {
+	case "embedded", "external":
+		return mode
+	}
+	if strings.TrimSpace(cfg.ResponsesBaseURL) != "" {
+		return "external"
+	}
+	if cfg.Embedded.Enabled {
+		return "embedded"
+	}
+	return ""
+}
+
+// EffectiveResponsesBaseURL returns the runtime routing target after applying any runtime-only override.
+func (cfg DataPlaneConfig) EffectiveResponsesBaseURL() string {
+	if runtimeURL := strings.TrimSpace(cfg.RuntimeResponsesBaseURL); runtimeURL != "" {
+		return runtimeURL
+	}
+	return strings.TrimSpace(cfg.ResponsesBaseURL)
 }
 
 // CloakConfig configures request cloaking for non-Claude-Code clients.

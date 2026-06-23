@@ -70,3 +70,29 @@ func TestRuntimeSnapshotNotifierPostsOnlyWhenSnapshotVersionChanges(t *testing.T
 		t.Fatalf("calls after repeated unchanged notify = %d, want 1", got)
 	}
 }
+
+func TestRuntimeSnapshotNotifierUsesRuntimeResponsesBaseURLOverride(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{}
+	cfg.DataPlane.RuntimeResponsesBaseURL = server.URL
+
+	manager := auth.NewManager(nil, nil, nil)
+	notifier := &RuntimeSnapshotNotifier{
+		client: &http.Client{
+			Transport: &http.Transport{Proxy: nil},
+		},
+	}
+
+	if err := notifier.NotifyIfChanged(context.Background(), cfg.CloneForRuntime(), manager); err != nil {
+		t.Fatalf("NotifyIfChanged() error = %v", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("calls = %d, want 1", got)
+	}
+}

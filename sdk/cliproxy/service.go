@@ -5,14 +5,18 @@ package cliproxy
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/dataplane/embedded"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
@@ -106,6 +110,28 @@ type Service struct {
 	homeClient       *home.Client
 	homeCancel       context.CancelFunc
 	homeLogForwarder *logging.HomeAppLogForwarder
+
+	embeddedDataPlane        embeddedDataPlaneController
+	embeddedDataPlaneConfig  *embeddedBootstrapConfig
+	embeddedDataPlaneFactory func(embedded.SupervisorConfig) embeddedDataPlaneController
+	embeddedArtifactProvider embedded.ArtifactProvider
+	embeddedManagementToken  string
+}
+
+type embeddedDataPlaneController interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+	EffectiveBaseURL() string
+}
+
+type embeddedBootstrapConfig struct {
+	BindAddr            string
+	StateDir            string
+	LogLevel            string
+	SnapshotURL         string
+	SnapshotBearerToken string
+	SnapshotPollSeconds int
+	StartupTimeout      time.Duration
 }
 
 const modelRegistrationMaxWorkersPerCategory = 5
@@ -1192,6 +1218,162 @@ func (s *Service) applyConfigUpdate(newCfg *config.Config) {
 	ctx := coreauth.WithSkipPersist(context.Background())
 	s.registerConfigAPIKeyAuths(ctx, newCfg)
 	s.syncPluginRuntime(ctx)
+	if err := s.reconcileEmbeddedDataPlane(context.Background(), newCfg); err != nil {
+		log.WithError(err).Warn("embedded data plane reconcile failed after config update")
+	}
+}
+
+func (s *Service) shouldUseEmbeddedDataPlane(cfg *config.Config) bool {
+	return cfg != nil && cfg.DataPlane.EffectiveMode() == "embedded"
+}
+
+func (s *Service) ensureEmbeddedManagementToken() (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("service is nil")
+	}
+	if strings.TrimSpace(s.embeddedManagementToken) != "" {
+		return s.embeddedManagementToken, nil
+	}
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate embedded management token: %w", err)
+	}
+	s.embeddedManagementToken = hex.EncodeToString(buf)
+	return s.embeddedManagementToken, nil
+}
+
+func (s *Service) embeddedSnapshotURL(cfg *config.Config) (string, error) {
+	if cfg == nil {
+		return "", fmt.Errorf("config is nil")
+	}
+	if cfg.TLS.Enable {
+		return "", fmt.Errorf("embedded data plane does not support tls-enabled management snapshot endpoint")
+	}
+	if cfg.Port <= 0 {
+		return "", fmt.Errorf("embedded data plane requires a fixed positive API port")
+	}
+	return "http://127.0.0.1:" + strconv.Itoa(cfg.Port) + "/v0/management/runtime-snapshot", nil
+}
+
+func (s *Service) embeddedSupervisorConfig(cfg *config.Config) (embedded.SupervisorConfig, error) {
+	if cfg == nil {
+		return embedded.SupervisorConfig{}, fmt.Errorf("config is nil")
+	}
+	snapshotURL, err := s.embeddedSnapshotURL(cfg)
+	if err != nil {
+		return embedded.SupervisorConfig{}, err
+	}
+	token, err := s.ensureEmbeddedManagementToken()
+	if err != nil {
+		return embedded.SupervisorConfig{}, err
+	}
+	bindAddr := strings.TrimSpace(cfg.DataPlane.Embedded.BindAddr)
+	if bindAddr == "" {
+		bindAddr = "127.0.0.1:4100"
+	}
+	logLevel := strings.TrimSpace(cfg.DataPlane.Embedded.LogLevel)
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	startupTimeout := 20 * time.Second
+	if seconds := cfg.DataPlane.Embedded.StartupTimeoutSeconds; seconds > 0 {
+		startupTimeout = time.Duration(seconds) * time.Second
+	}
+	return embedded.SupervisorConfig{
+		BindAddr:            bindAddr,
+		StateDir:            strings.TrimSpace(cfg.DataPlane.Embedded.StateDir),
+		LogLevel:            logLevel,
+		SnapshotURL:         snapshotURL,
+		SnapshotBearerToken: token,
+		SnapshotPollSeconds: 30,
+		StartupTimeout:      startupTimeout,
+		ArtifactProvider:    s.embeddedArtifactProvider,
+	}, nil
+}
+
+func (s *Service) embeddedBootstrapConfigFor(cfg *config.Config) (*embeddedBootstrapConfig, error) {
+	supervisorCfg, err := s.embeddedSupervisorConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &embeddedBootstrapConfig{
+		BindAddr:            supervisorCfg.BindAddr,
+		StateDir:            supervisorCfg.StateDir,
+		LogLevel:            supervisorCfg.LogLevel,
+		SnapshotURL:         supervisorCfg.SnapshotURL,
+		SnapshotBearerToken: supervisorCfg.SnapshotBearerToken,
+		SnapshotPollSeconds: supervisorCfg.SnapshotPollSeconds,
+		StartupTimeout:      supervisorCfg.StartupTimeout,
+	}, nil
+}
+
+func sameEmbeddedBootstrapConfig(left, right *embeddedBootstrapConfig) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.BindAddr == right.BindAddr &&
+		left.StateDir == right.StateDir &&
+		left.LogLevel == right.LogLevel &&
+		left.SnapshotURL == right.SnapshotURL &&
+		left.SnapshotBearerToken == right.SnapshotBearerToken &&
+		left.SnapshotPollSeconds == right.SnapshotPollSeconds &&
+		left.StartupTimeout == right.StartupTimeout
+}
+
+func (s *Service) reconcileEmbeddedDataPlane(ctx context.Context, cfg *config.Config) error {
+	if s == nil || cfg == nil {
+		return nil
+	}
+	if !s.shouldUseEmbeddedDataPlane(cfg) {
+		cfg.DataPlane.RuntimeResponsesBaseURL = ""
+		if s.embeddedDataPlane != nil {
+			if err := s.embeddedDataPlane.Stop(ctx); err != nil {
+				return err
+			}
+			s.embeddedDataPlane = nil
+			s.embeddedDataPlaneConfig = nil
+		}
+		return nil
+	}
+
+	supervisorCfg, err := s.embeddedSupervisorConfig(cfg)
+	if err != nil {
+		cfg.DataPlane.RuntimeResponsesBaseURL = ""
+		return err
+	}
+	bootstrapCfg, err := s.embeddedBootstrapConfigFor(cfg)
+	if err != nil {
+		cfg.DataPlane.RuntimeResponsesBaseURL = ""
+		return err
+	}
+	if s.embeddedDataPlane != nil && sameEmbeddedBootstrapConfig(s.embeddedDataPlaneConfig, bootstrapCfg) {
+		cfg.DataPlane.RuntimeResponsesBaseURL = s.embeddedDataPlane.EffectiveBaseURL()
+		return nil
+	}
+
+	if s.embeddedDataPlane != nil {
+		if err := s.embeddedDataPlane.Stop(ctx); err != nil {
+			return err
+		}
+		s.embeddedDataPlane = nil
+		s.embeddedDataPlaneConfig = nil
+	}
+
+	factory := s.embeddedDataPlaneFactory
+	if factory == nil {
+		factory = func(cfg embedded.SupervisorConfig) embeddedDataPlaneController {
+			return embedded.NewSupervisor(cfg)
+		}
+	}
+	supervisor := factory(supervisorCfg)
+	if err := supervisor.Start(ctx); err != nil {
+		cfg.DataPlane.RuntimeResponsesBaseURL = ""
+		return err
+	}
+	s.embeddedDataPlane = supervisor
+	s.embeddedDataPlaneConfig = bootstrapCfg
+	cfg.DataPlane.RuntimeResponsesBaseURL = supervisor.EffectiveBaseURL()
+	return nil
 }
 
 func (s *Service) registerConfigAPIKeyAuths(ctx context.Context, cfg *config.Config) {
@@ -1473,8 +1655,17 @@ func (s *Service) Run(ctx context.Context) error {
 		redisqueue.SetEnabled(true)
 	}
 
+	serverOptions := append([]api.ServerOption(nil), s.serverOptions...)
+	if s.shouldUseEmbeddedDataPlane(s.cfg) {
+		token, errToken := s.ensureEmbeddedManagementToken()
+		if errToken != nil {
+			return errToken
+		}
+		serverOptions = append(serverOptions, api.WithLocalManagementPassword(token))
+	}
+
 	// handlers no longer depend on legacy clients; pass nil slice initially
-	s.server = api.NewServer(s.cfg, s.coreManager, s.accessManager, s.configPath, s.serverOptions...)
+	s.server = api.NewServer(s.cfg, s.coreManager, s.accessManager, s.configPath, serverOptions...)
 	s.syncPluginRuntimeConfig(ctx)
 	if homeEnabled {
 		s.syncPluginModelRuntime(ctx)
@@ -1523,6 +1714,10 @@ func (s *Service) Run(ctx context.Context) error {
 
 	time.Sleep(100 * time.Millisecond)
 	fmt.Printf("API server started successfully on: %s:%d\n", s.cfg.Host, s.cfg.Port)
+
+	if err := s.reconcileEmbeddedDataPlane(context.Background(), s.cfg); err != nil {
+		return fmt.Errorf("cliproxy: failed to start embedded data plane: %w", err)
+	}
 
 	s.applyPprofConfig(s.cfg)
 
@@ -1613,6 +1808,15 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		}
 		if s.coreManager != nil {
 			s.coreManager.StopAutoRefresh()
+		}
+		if s.embeddedDataPlane != nil {
+			if err := s.embeddedDataPlane.Stop(ctx); err != nil {
+				log.Errorf("failed to stop embedded data plane: %v", err)
+				if shutdownErr == nil {
+					shutdownErr = err
+				}
+			}
+			s.embeddedDataPlane = nil
 		}
 		if s.watcher != nil {
 			if err := s.watcher.Stop(); err != nil {

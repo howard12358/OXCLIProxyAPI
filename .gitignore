@@ -11,6 +11,8 @@ bin/*
 logs/*
 conv/*
 temp/*
+internal/dataplane/embedded/release_artifact.bin
+internal/dataplane/embedded/release_artifact_generated.go
 refs/*
 plugins/*
 examples/plugin/bin/*

@@ -10,16 +10,16 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func makeDataPlaneResponsesProxy(baseURL string) gin.HandlerFunc {
+func newDataPlaneResponsesReverseProxy(baseURL string) (*httputil.ReverseProxy, bool) {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
-		return nil
+		return nil, false
 	}
 
 	target, err := url.Parse(baseURL)
 	if err != nil {
 		log.Errorf("invalid data plane responses base URL %q: %v", baseURL, err)
-		return nil
+		return nil, false
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
@@ -33,6 +33,15 @@ func makeDataPlaneResponsesProxy(baseURL string) gin.HandlerFunc {
 	proxy.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
 		log.Errorf("data plane responses proxy error: %v", err)
 		http.Error(w, "data plane unavailable", http.StatusBadGateway)
+	}
+
+	return proxy, true
+}
+
+func makeDataPlaneResponsesProxy(baseURL string) gin.HandlerFunc {
+	proxy, ok := newDataPlaneResponsesReverseProxy(baseURL)
+	if !ok {
+		return nil
 	}
 
 	return func(c *gin.Context) {

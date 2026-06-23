@@ -9,6 +9,10 @@ SNAPSHOT_URL ?= http://$(GO_ADDR)/v0/management/runtime-snapshot
 RUST_BIND_ADDR ?= 127.0.0.1:4100
 RUST_READY_URL ?= http://$(RUST_BIND_ADDR)/readyz
 RUST_DIR ?= rust/cliproxy-data-plane
+RUST_TARGET ?=
+RELEASE_VERSION ?= dev
+HOST_UNAME_S ?= $(shell uname -s)
+HOST_UNAME_M ?= $(shell uname -m)
 UPSTREAM_PROXY ?=
 UPSTREAM_HTTP_PROXY ?=
 UPSTREAM_HTTPS_PROXY ?=
@@ -23,7 +27,7 @@ SNAPSHOT_CURRENT_FILE ?= $(TMP_DIR)/cpa-runtime-snapshot.current.json
 RUST_SNAPSHOT_URL ?= http://$(RUST_BIND_ADDR)/v0/runtime/snapshot
 RUST_SNAPSHOT_FILE ?= $(TMP_DIR)/rs-runtime-snapshot.current.json
 
-.PHONY: help dev-stack dev-stack-url stop-stack restart-stack status-stack ps-stack kill-stack-orphans logs-stack logs-go logs-rust snapshot-stack snapshot-current snapshot-rs diff-snapshots test-responses
+.PHONY: help dev-stack dev-stack-url stop-stack restart-stack status-stack ps-stack kill-stack-orphans logs-stack logs-go logs-rust snapshot-stack snapshot-current snapshot-rs diff-snapshots test-responses prepare-embedded-data-plane build-release-embedded clean-release-embedded
 
 help:
 	@printf "%s\n" \
@@ -43,6 +47,9 @@ help:
 	"  make snapshot-rs    拉取当前 Rust 数据面已应用的 snapshot 到文件" \
 	"  make diff-snapshots 拉取 Go/Rust 当前 snapshot 并输出差异" \
 	"  make test-responses 调用 Rust /v1/responses 测试接口" \
+	"  make prepare-embedded-data-plane 生成 release 用 embedded Rust artifact" \
+	"  make build-release-embedded       用 release_embedded_artifact tag 构建 Go 主程序" \
+	"  make clean-release-embedded       清理临时生成的 embedded artifact 文件" \
 	"" \
 	"可选变量：" \
 	"  GO_CONFIG=<path>        默认 $(GO_CONFIG)" \
@@ -51,6 +58,8 @@ help:
 	"  RUST_BIND_ADDR=<addr>   默认 $(RUST_BIND_ADDR)" \
 	"  SNAPSHOT_CURRENT_FILE=<path> 默认 $(SNAPSHOT_CURRENT_FILE)" \
 	"  RUST_SNAPSHOT_FILE=<path> 默认 $(RUST_SNAPSHOT_FILE)" \
+	"  RUST_TARGET=<triple>    可选；默认按当前机器推断，例如 aarch64-apple-darwin" \
+	"  RELEASE_VERSION=<ver>   默认 $(RELEASE_VERSION)" \
 	"  UPSTREAM_PROXY=<url|direct>  例如 socks5h://127.0.0.1:7897" \
 	"  UPSTREAM_HTTP_PROXY=<url>  例如 http://127.0.0.1:7897" \
 	"  UPSTREAM_HTTPS_PROXY=<url>  例如 http://127.0.0.1:7897"
@@ -242,3 +251,29 @@ test-responses:
 	@curl -sS -N "http://$(RUST_BIND_ADDR)/v1/responses" \
 		-H 'content-type: application/json' \
 		-d '{"model":"gpt-5.5","stream":true,"input":"hello from make dev-stack"}'
+
+prepare-embedded-data-plane:
+	@set -euo pipefail; \
+	rust_target="$(RUST_TARGET)"; \
+	if [[ -z "$$rust_target" ]]; then \
+		case "$(HOST_UNAME_S):$(HOST_UNAME_M)" in \
+			Darwin:arm64) rust_target="aarch64-apple-darwin" ;; \
+			Darwin:x86_64) rust_target="x86_64-apple-darwin" ;; \
+			Linux:arm64|Linux:aarch64) rust_target="aarch64-unknown-linux-gnu" ;; \
+			Linux:x86_64) rust_target="x86_64-unknown-linux-gnu" ;; \
+			MINGW64_NT-*:x86_64|MSYS_NT-*:x86_64) rust_target="x86_64-pc-windows-msvc" ;; \
+			MINGW64_NT-*:arm64|MSYS_NT-*:arm64) rust_target="aarch64-pc-windows-msvc" ;; \
+			*) \
+				echo "Unable to infer RUST_TARGET from $(HOST_UNAME_S)/$(HOST_UNAME_M); please set it explicitly."; \
+				exit 1; \
+				;; \
+		esac; \
+	fi; \
+	RUST_TARGET="$$rust_target" RELEASE_VERSION="$(RELEASE_VERSION)" bash ./scripts/prepare-embedded-data-plane-release.sh
+
+build-release-embedded:
+	@set -euo pipefail; \
+	go build -tags release_embedded_artifact -o cli-proxy-api ./cmd/server
+
+clean-release-embedded:
+	@rm -f internal/dataplane/embedded/release_artifact.bin internal/dataplane/embedded/release_artifact_generated.go

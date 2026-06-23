@@ -101,6 +101,21 @@ func TestBuildRuntimeSnapshotExportsCodexOAuthAuth(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeSnapshotUsesRuntimeResponsesBaseURLOverride(t *testing.T) {
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+	cfg := &config.Config{
+		DataPlane: config.DataPlaneConfig{
+			ResponsesBaseURL:        "http://127.0.0.1:4100",
+			RuntimeResponsesBaseURL: "http://127.0.0.1:4200",
+		},
+	}
+
+	snapshot := BuildRuntimeSnapshot(cfg, coreauth.NewManager(nil, nil, nil), now)
+	if snapshot.Listeners.PublicHTTP != "http://127.0.0.1:4200" {
+		t.Fatalf("listeners.public_http = %q, want http://127.0.0.1:4200", snapshot.Listeners.PublicHTTP)
+	}
+}
+
 func TestBuildRuntimeSnapshotSkipsDisabledAndMissingTokenAuths(t *testing.T) {
 	manager := coreauth.NewManager(nil, nil, nil)
 	_, _ = manager.Register(context.Background(), &coreauth.Auth{

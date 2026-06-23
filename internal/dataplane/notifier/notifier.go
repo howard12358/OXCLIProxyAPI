@@ -53,7 +53,7 @@ func (n *RuntimeSnapshotNotifier) NotifyIfChanged(ctx context.Context, cfg *conf
 		return nil
 	}
 
-	targetURL, ok := snapshotNotifyURL(cfg.DataPlane.ResponsesBaseURL)
+	targetURL, ok := snapshotNotifyURL(cfg.DataPlane.EffectiveResponsesBaseURL())
 	if !ok {
 		return nil
 	}

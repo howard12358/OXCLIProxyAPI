@@ -11,6 +11,7 @@ import (
 
 	configaccess "github.com/router-for-me/CLIProxyAPI/v7/internal/access/config_access"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/dataplane/embedded"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
@@ -58,6 +59,9 @@ type Builder struct {
 
 	// serverOptions contains additional server configuration options.
 	serverOptions []api.ServerOption
+
+	// embeddedDataPlaneArtifactProvider resolves the local Rust data-plane artifact in embedded mode.
+	embeddedDataPlaneArtifactProvider embedded.ArtifactProvider
 }
 
 // Hooks allows callers to plug into service lifecycle stages.
@@ -179,6 +183,15 @@ func (b *Builder) WithPostAuthHook(hook coreauth.PostAuthHook) *Builder {
 	return b
 }
 
+// WithEmbeddedDataPlaneArtifactProvider overrides the artifact provider used by embedded data-plane mode.
+func (b *Builder) WithEmbeddedDataPlaneArtifactProvider(provider embedded.ArtifactProvider) *Builder {
+	if provider == nil {
+		return b
+	}
+	b.embeddedDataPlaneArtifactProvider = provider
+	return b
+}
+
 // Build validates inputs, applies defaults, and returns a ready-to-run service.
 func (b *Builder) Build() (*Service, error) {
 	if b.cfg == nil {
@@ -271,17 +284,18 @@ func (b *Builder) Build() (*Service, error) {
 	}
 
 	service := &Service{
-		cfg:            b.cfg,
-		configPath:     b.configPath,
-		tokenProvider:  tokenProvider,
-		apiKeyProvider: apiKeyProvider,
-		watcherFactory: watcherFactory,
-		hooks:          b.hooks,
-		authManager:    authManager,
-		accessManager:  accessManager,
-		coreManager:    coreManager,
-		pluginHost:     pluginHost,
-		serverOptions:  append([]api.ServerOption(nil), b.serverOptions...),
+		cfg:                      b.cfg,
+		configPath:               b.configPath,
+		tokenProvider:            tokenProvider,
+		apiKeyProvider:           apiKeyProvider,
+		watcherFactory:           watcherFactory,
+		hooks:                    b.hooks,
+		authManager:              authManager,
+		accessManager:            accessManager,
+		coreManager:              coreManager,
+		pluginHost:               pluginHost,
+		serverOptions:            append([]api.ServerOption(nil), b.serverOptions...),
+		embeddedArtifactProvider: b.embeddedDataPlaneArtifactProvider,
 	}
 	if b.postAuthHook != nil {
 		service.serverOptions = append(service.serverOptions, api.WithPostAuthHook(b.postAuthHook))

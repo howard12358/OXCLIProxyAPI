@@ -162,6 +162,24 @@ routing:
   # How long session-to-auth bindings are retained. Default: 1h
   session-affinity-ttl: "1h"
 
+# Optional Rust data-plane routing.
+# external mode: Go forwards /v1/responses to an already running Rust data plane.
+# embedded mode: Go manages a local Rust child process and uses it for /v1/responses.
+# data-plane:
+#   mode: "external" # embedded | external
+#   responses-base-url: "http://127.0.0.1:4100" # used by external mode
+#   embedded:
+#     enabled: true
+#     bind-addr: "127.0.0.1:4100"
+#     state-dir: "" # empty means use the platform default state directory
+#     log-level: "info"
+#     extract-policy: "reuse-if-match"
+#     startup-timeout-seconds: 20
+#
+# Embedded mode currently requires an available local Rust binary artifact.
+# For development, you can point Go at an existing binary with:
+#   CLIPROXY_DATA_PLANE_BINARY_PATH=/path/to/cliproxy-data-plane
+
 # Codex provider behavior.
 codex:
   # When true, and routing.strategy is fill-first or routing.session-affinity is true,

@@ -426,10 +426,7 @@ func (s *Server) setupRoutes() {
 	geminiCLIHandlers := gemini.NewGeminiCLIAPIHandler(s.handlers)
 	claudeCodeHandlers := claude.NewClaudeCodeAPIHandler(s.handlers)
 	openaiResponsesHandlers := openai.NewOpenAIResponsesAPIHandler(s.handlers)
-	responsesPostHandler := gin.HandlerFunc(openaiResponsesHandlers.Responses)
-	if proxyHandler := makeDataPlaneResponsesProxy(s.cfg.DataPlane.ResponsesBaseURL); proxyHandler != nil {
-		responsesPostHandler = proxyHandler
-	}
+	responsesPostHandler := s.makeResponsesPostHandler(openaiResponsesHandlers.Responses)
 
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
@@ -754,6 +751,24 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.POST("/oauth-callback", s.mgmt.PostOAuthCallback)
 		mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
 	}
+}
+
+func (s *Server) makeResponsesPostHandler(fallback gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if proxy, ok := newDataPlaneResponsesReverseProxy(s.currentDataPlaneResponsesBaseURL()); ok {
+			proxy.ServeHTTP(c.Writer, c.Request)
+			c.Abort()
+			return
+		}
+		fallback(c)
+	}
+}
+
+func (s *Server) currentDataPlaneResponsesBaseURL() string {
+	if s == nil || s.cfg == nil {
+		return ""
+	}
+	return s.cfg.DataPlane.EffectiveResponsesBaseURL()
 }
 
 func (s *Server) managementAvailabilityMiddleware() gin.HandlerFunc {

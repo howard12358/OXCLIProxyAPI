@@ -147,7 +147,7 @@ func dataPlanePublicHTTP(cfg *config.Config) string {
 	if cfg == nil {
 		return ""
 	}
-	return strings.TrimSpace(cfg.DataPlane.ResponsesBaseURL)
+	return cfg.DataPlane.EffectiveResponsesBaseURL()
 }
 
 func proxyURL(cfg *config.Config) string {

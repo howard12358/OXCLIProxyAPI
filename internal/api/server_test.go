@@ -394,6 +394,59 @@ func TestCodexDirectResponsesRouteProxiesToDataPlaneWhenConfigured(t *testing.T)
 	}
 }
 
+func TestResponsesRouteUsesUpdatedRuntimeDataPlaneBaseURL(t *testing.T) {
+	t.Parallel()
+
+	upstreamA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"source":"rust-a"}`))
+	}))
+	t.Cleanup(upstreamA.Close)
+
+	upstreamB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"source":"rust-b"}`))
+	}))
+	t.Cleanup(upstreamB.Close)
+
+	server := newTestServer(t)
+	httpServer := httptest.NewServer(server.engine)
+	t.Cleanup(httpServer.Close)
+
+	doRequest := func() string {
+		t.Helper()
+		req, errReq := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":"hello"}`))
+		if errReq != nil {
+			t.Fatalf("new request: %v", errReq)
+		}
+		req.Header.Set("Authorization", "Bearer test-key")
+		req.Header.Set("Content-Type", "application/json")
+		resp, errDo := http.DefaultClient.Do(req)
+		if errDo != nil {
+			t.Fatalf("do request: %v", errDo)
+		}
+		defer resp.Body.Close()
+		body, errRead := io.ReadAll(resp.Body)
+		if errRead != nil {
+			t.Fatalf("read body: %v", errRead)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d body=%s", resp.StatusCode, http.StatusOK, string(body))
+		}
+		return string(body)
+	}
+
+	server.cfg.DataPlane.RuntimeResponsesBaseURL = upstreamA.URL
+	if body := doRequest(); !strings.Contains(body, `"source":"rust-a"`) {
+		t.Fatalf("body = %s, want proxied response from upstream A", body)
+	}
+
+	server.cfg.DataPlane.RuntimeResponsesBaseURL = upstreamB.URL
+	if body := doRequest(); !strings.Contains(body, `"source":"rust-b"`) {
+		t.Fatalf("body = %s, want proxied response from upstream B", body)
+	}
+}
+
 func TestManagementRuntimeSnapshotRoute(t *testing.T) {
 	t.Setenv("MANAGEMENT_PASSWORD", "test-management-key")
 
