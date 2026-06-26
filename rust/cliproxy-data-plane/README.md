@@ -12,7 +12,7 @@
 - runtime snapshot 契约基础类型
 - 本地文件和 HTTP snapshot 拉取
 - snapshot 校验、版本比较和运行时状态切换
-- `/v1/responses` mock ingress 垂直切片
+- `/v1/responses` handler / upstream / SSE / mock 分层实现
 - OpenAI / Codex 上游执行运行时 v1
 
 ## 当前目录结构
@@ -20,12 +20,29 @@
 ```text
 rust/cliproxy-data-plane/
   docs/
+    README.md
+    current/
+    design/
+    history/
   crates/
     common-types/
     runtime-config-client/
   src/
     main.rs
+    responses.rs
+    responses/
+      handler.rs
+      upstream.rs
+      sse.rs
+      mock.rs
 ```
+
+文档入口：
+
+- `docs/README.md`
+- `docs/current/` 存放当前事实文档
+- `docs/design/` 存放设计方案
+- `docs/history/` 存放阶段性迁移和历史材料
 
 ## 运行方式
 

@@ -20,6 +20,50 @@ use common::{
     test_runtime_with_auths, test_upstream,
 };
 
+async fn spawn_split_sse_openai_upstream() -> String {
+    use axum::{
+        Router as AxumRouter,
+        body::Body as AxumBody,
+        http::{HeaderMap, Request as AxumRequest, StatusCode as AxumStatusCode},
+        response::IntoResponse,
+        routing::post as axum_post,
+    };
+    use tokio::net::TcpListener;
+
+    async fn responses(_headers: HeaderMap, _request: AxumRequest<AxumBody>) -> impl IntoResponse {
+        (
+            AxumStatusCode::OK,
+            [("content-type", "text/event-stream; charset=utf-8")],
+            AxumBody::from(concat!(
+                "event: response.created",
+                "\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-stream-1\",\"status\":\"in_progress\"}}",
+                "\n\n",
+                "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc-1\",\"call_id\":\"call-1\",\"name\":\"shell\",\"arguments\":\"{}\"}}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-stream-1\",\"output\":[]}}"
+            )),
+        )
+            .into_response()
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind upstream");
+    let addr = listener.local_addr().expect("upstream addr");
+    let app = AxumRouter::new().route("/responses", axum_post(responses));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve upstream");
+    });
+    format!("http://{}", addr)
+}
+
+fn sse_data_payload(frame: &str) -> Option<String> {
+    let lines = frame
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("data:").map(str::trim_start))
+        .collect::<Vec<_>>();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
 #[tokio::test]
 async fn responses_route_returns_not_found_when_disabled() {
     let app = router(test_runtime(false), test_upstream());
@@ -258,6 +302,49 @@ async fn responses_streaming_prefers_real_openai_upstream() {
     let text = String::from_utf8(body.to_vec()).expect("valid utf8");
     assert!(text.contains("\"provider\":\"openai\""));
     assert!(text.contains("Bearer openai-key"));
+}
+
+#[tokio::test]
+async fn responses_stream_repairs_completed_output_from_split_upstream_frames() {
+    let upstream_url = spawn_split_sse_openai_upstream().await;
+    let app = router(test_runtime(true), openai_upstream(upstream_url));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"model":"codex-latest","stream":true,"input":"hello"}).to_string(),
+                ))
+                .expect("build request"),
+        )
+        .await
+        .expect("call app");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let text = String::from_utf8(body.to_vec()).expect("valid utf8");
+    assert!(text.contains("event: response.created"));
+    assert!(text.contains("\"response.output_item.done\""));
+    assert!(text.contains("\"response.completed\""));
+    let completed_payload = text
+        .split("\n\n")
+        .find_map(|frame| {
+            let payload = sse_data_payload(frame)?;
+            payload
+                .contains("\"type\":\"response.completed\"")
+                .then_some(payload)
+        })
+        .expect("completed payload");
+    let completed: Value = serde_json::from_str(&completed_payload).expect("parse completed");
+    assert_eq!(completed["response"]["output"][0]["id"], "fc-1");
+    assert_eq!(completed["response"]["output"][0]["name"], "shell");
 }
 
 #[tokio::test]

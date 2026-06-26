@@ -1,0 +1,271 @@
+use std::convert::Infallible;
+
+use anyhow::{Context, Result};
+use async_stream::stream;
+use axum::body::Body;
+use bytes::Bytes;
+use cliproxy_common_types::{
+    routing::ExecutionPlan,
+    snapshot::{AuthRecord, RuntimeSnapshot},
+};
+use cliproxy_upstream_runtime::{UpstreamExecutionResult, UpstreamRequest, UpstreamRuntime};
+use futures_util::StreamExt;
+use serde_json::{Value, json};
+use tracing::{debug, info, warn};
+
+use super::sse::{ResponsesSseFramer, extract_completed_response_from_sse};
+use super::{
+    DEFAULT_CODEX_INSTRUCTIONS, ResponsesRequest, response_from_aggregated_json_body,
+    response_from_body, response_with_stream,
+};
+
+pub(super) async fn execute_real_upstream(
+    upstream: UpstreamRuntime,
+    request: ResponsesRequest,
+    snapshot: &RuntimeSnapshot,
+    execution_plan: &ExecutionPlan,
+    selected_auth: Option<&AuthRecord>,
+) -> Result<axum::http::Response<Body>> {
+    let downstream_stream = request.stream;
+    let aggregate_codex_stream = execution_plan.provider
+        == cliproxy_common_types::upstream::ProviderKind::Codex
+        && !downstream_stream;
+    let mut upstream_request = normalize_upstream_request(request, execution_plan);
+    upstream_request.model = execution_plan.model.clone();
+    if aggregate_codex_stream {
+        upstream_request.stream = true;
+    }
+    let request_body =
+        serde_json::to_vec(&upstream_request).context("failed to serialize responses request")?;
+    info!(
+        provider = ?execution_plan.provider,
+        auth_id = %execution_plan.auth_id,
+        resolved_model = %execution_plan.model,
+        stickiness_source = ?execution_plan.stickiness_source,
+        "responses execution plan selected"
+    );
+    let upstream_request_template = UpstreamRequest {
+        model: upstream_request.model.clone(),
+        body: request_body,
+        stream: upstream_request.stream,
+    };
+    let upstream_result = execute_upstream_with_retries(
+        &upstream,
+        snapshot,
+        execution_plan,
+        selected_auth,
+        &upstream_request_template,
+        snapshot.network.upstream_proxy.as_deref(),
+    )
+    .await?;
+
+    match upstream_result {
+        UpstreamExecutionResult::NonStreaming(response) => {
+            let _provider = response.provider;
+            let _events = response.events;
+            Ok(response_from_body(response.head, response.body))
+        }
+        UpstreamExecutionResult::Streaming(response) => {
+            if aggregate_codex_stream {
+                let _provider = response.provider;
+                let _events = response.events;
+                let body = aggregate_streaming_response_body(response.first_chunk, response.stream)
+                    .await?;
+                return Ok(response_from_aggregated_json_body(response.head, body));
+            }
+            let _provider = response.provider;
+            let _events = response.events;
+            let first_chunk = response.first_chunk;
+            let tail = response.stream;
+            let body = Body::from_stream(stream! {
+                let mut framer = ResponsesSseFramer::default();
+                for frame in framer.push_chunk(first_chunk) {
+                    yield Ok::<Bytes, Infallible>(frame);
+                }
+                futures_util::pin_mut!(tail);
+                while let Some(item) = tail.next().await {
+                    match item {
+                        Ok(bytes) => {
+                            for frame in framer.push_chunk(bytes) {
+                                yield Ok(frame);
+                            }
+                        }
+                        Err(err) => {
+                            let frame = Bytes::from(format!(
+                                "event: response.error\ndata: {{\"type\":\"response.error\",\"message\":{}}}\n\n",
+                                serde_json::to_string(&err.to_string()).unwrap_or_else(|_| "\"upstream stream error\"".to_string())
+                            ));
+                            for pending in framer.finish() {
+                                yield Ok(pending);
+                            }
+                            yield Ok(frame);
+                            break;
+                        }
+                    }
+                }
+                for frame in framer.finish() {
+                    yield Ok(frame);
+                }
+            });
+            Ok(response_with_stream(response.head, body))
+        }
+    }
+}
+
+async fn execute_upstream_with_retries(
+    upstream: &UpstreamRuntime,
+    snapshot: &RuntimeSnapshot,
+    execution_plan: &ExecutionPlan,
+    selected_auth: Option<&AuthRecord>,
+    request: &UpstreamRequest,
+    proxy_override: Option<&str>,
+) -> Result<UpstreamExecutionResult> {
+    if let Some(auth) = selected_auth {
+        if upstream.can_execute_for_auth(auth) {
+            let mut last_error = None;
+            for candidate in auth_retry_chain(snapshot, execution_plan, auth) {
+                match upstream
+                    .execute_responses_for_auth(&candidate, request.clone(), proxy_override)
+                    .await
+                {
+                    Ok(response) => return Ok(response),
+                    Err(err) if should_retry_auth_bound_error(&err) => {
+                        info!(
+                            failed_auth_id = %candidate.id,
+                            next_retry_candidates = ?execution_plan.retry_candidates,
+                            reason = %err,
+                            "responses upstream auth failed, retrying next candidate"
+                        );
+                        last_error = Some(err);
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+            if let Some(err) = last_error {
+                return Err(err);
+            }
+        } else {
+            return upstream
+                .execute_responses(request.clone(), proxy_override)
+                .await;
+        }
+    }
+
+    upstream
+        .execute_responses(request.clone(), proxy_override)
+        .await
+}
+
+fn auth_retry_chain(
+    snapshot: &RuntimeSnapshot,
+    execution_plan: &ExecutionPlan,
+    selected_auth: &AuthRecord,
+) -> Vec<AuthRecord> {
+    let mut chain = vec![selected_auth.clone()];
+    for auth_id in &execution_plan.retry_candidates {
+        if let Some(auth) = snapshot.auth_pool.iter().find(|auth| auth.id == *auth_id) {
+            chain.push(auth.clone());
+        }
+    }
+    chain
+}
+
+pub(super) fn should_retry_auth_bound_error(err: &anyhow::Error) -> bool {
+    let message = err.to_string().to_ascii_lowercase();
+    message.contains("upstream codex error 401")
+        || message.contains("upstream codex error 403")
+        || is_codex_quota_exhaustion_error(&message)
+        || message.contains("account_deactivated")
+        || message.contains("invalid_api_key")
+}
+
+fn is_codex_quota_exhaustion_error(message: &str) -> bool {
+    message.contains("upstream codex error 429")
+        && (message.contains("usage_limit_reached")
+            || message.contains("the usage limit has been reached"))
+}
+
+pub(super) fn log_upstream_failure(err: &anyhow::Error, execution_plan: &ExecutionPlan) {
+    warn!(
+        provider = ?execution_plan.provider,
+        auth_id = %execution_plan.auth_id,
+        resolved_model = %execution_plan.model,
+        stickiness_source = ?execution_plan.stickiness_source,
+        error = %err,
+        "responses upstream execution failed"
+    );
+
+    let chain = err
+        .chain()
+        .enumerate()
+        .map(|(index, cause)| format!("{index}: {cause}"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+
+    debug!(
+        provider = ?execution_plan.provider,
+        auth_id = %execution_plan.auth_id,
+        resolved_model = %execution_plan.model,
+        error_chain = %chain,
+        "responses upstream failure chain"
+    );
+}
+
+pub(super) fn normalize_upstream_request(
+    mut request: ResponsesRequest,
+    execution_plan: &ExecutionPlan,
+) -> ResponsesRequest {
+    if execution_plan.provider != cliproxy_common_types::upstream::ProviderKind::Codex {
+        return request;
+    }
+
+    request.store = Some(false);
+    request.metadata = None;
+
+    if request
+        .instructions
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        request.instructions = Some(DEFAULT_CODEX_INSTRUCTIONS.to_string());
+    }
+
+    if let Some(Value::String(text)) = request.input.take() {
+        request.input = Some(json!([
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": text
+                    }
+                ]
+            }
+        ]));
+    }
+
+    request
+}
+
+async fn aggregate_streaming_response_body(
+    first_chunk: Bytes,
+    mut tail: cliproxy_upstream_runtime::ByteStream,
+) -> Result<Bytes> {
+    let mut framer = ResponsesSseFramer::default();
+    let mut combined = Vec::new();
+    for frame in framer.push_chunk(first_chunk) {
+        combined.extend_from_slice(&frame);
+    }
+    while let Some(item) = tail.next().await {
+        let bytes = item?;
+        for frame in framer.push_chunk(bytes) {
+            combined.extend_from_slice(&frame);
+        }
+    }
+    for frame in framer.finish() {
+        combined.extend_from_slice(&frame);
+    }
+    extract_completed_response_from_sse(&combined)
+}

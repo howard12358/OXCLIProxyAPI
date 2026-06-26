@@ -68,8 +68,8 @@ pub fn router_with_snapshot_client(
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/v0/runtime/snapshot", get(get_runtime_snapshot))
-        .route("/v1/responses", post(post_responses))
         .route("/v0/runtime/snapshot-notify", post(post_snapshot_notify))
+        .route("/v1/responses", post(post_responses))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
 }
