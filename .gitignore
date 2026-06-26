@@ -39,6 +39,16 @@ GEMINI.md
 # Tooling metadata
 .vscode/*
 .worktrees/
+.ai-harness/local/*
+!.ai-harness/local/README.md
+!.ai-harness/local/session-log/
+!.ai-harness/local/session-log/.gitkeep
+!.ai-harness/local/scratch/
+!.ai-harness/local/scratch/.gitkeep
+.ai-harness/local/session-log/*
+!.ai-harness/local/session-log/.gitkeep
+.ai-harness/local/scratch/*
+!.ai-harness/local/scratch/.gitkeep
 .codex/*
 .claude/*
 .claude

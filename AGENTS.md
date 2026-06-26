@@ -13,26 +13,27 @@ This file defines long-lived rules for coding agents working in this repository.
 - Read this file first.
 - Then read:
   - `.ai-harness/README.md`
-  - `.ai-harness/project-state.md`
-  - `.ai-harness/architecture.md`
-  - `.ai-harness/conventions.md`
-  - `.ai-harness/commands.md`
-  - `.ai-harness/testing.md`
+  - `.ai-harness/shared/project-context.md`
+  - `.ai-harness/shared/current-state.md`
+  - `.ai-harness/shared/architecture.md`
+  - `.ai-harness/shared/conventions.md`
+  - `.ai-harness/shared/commands.md`
+  - `.ai-harness/shared/testing.md`
 - Also read any relevant files under:
-  - `.ai-harness/decisions/`
-  - `.ai-harness/features/`
-  - `.ai-harness/bugs/`
+  - `.ai-harness/shared/decisions/`
+  - `.ai-harness/shared/features/`
+  - `.ai-harness/shared/bugs/`
 
 ## When `.ai-harness/` Must Be Updated
 
-- Update `.ai-harness/project-state.md` when implemented capabilities, active direction, or known risks change.
-- Update `.ai-harness/architecture.md` when module boundaries, data flow, control flow, extension points, config flow, or runtime topology change.
-- Update `.ai-harness/conventions.md` when stable project conventions change.
-- Update `.ai-harness/commands.md` or `.ai-harness/testing.md` when supported commands or validation workflow change.
-- Update `.ai-harness/features/` when user-visible behavior changes.
-- Update `.ai-harness/bugs/` when a bug is fixed and root cause is understood.
-- Update `.ai-harness/decisions/` when architecture, public API, config format, deployment mode, directory structure, or data model changes.
-- After every non-trivial session, append an entry to `.ai-harness/session-log.md`.
+- Update `.ai-harness/shared/current-state.md` when durable implemented capabilities, known risks, or unresolved boundaries change.
+- Update `.ai-harness/shared/architecture.md` when module boundaries, data flow, control flow, extension points, config flow, or runtime topology change.
+- Update `.ai-harness/shared/conventions.md` when stable project conventions change.
+- Update `.ai-harness/shared/commands.md` or `.ai-harness/shared/testing.md` when supported commands or validation workflow change.
+- Update `.ai-harness/shared/features/` when user-visible behavior changes.
+- Update `.ai-harness/shared/bugs/` when a bug is fixed and root cause is understood.
+- Update `.ai-harness/shared/decisions/` when architecture, public API, config format, deployment mode, directory structure, or data model changes.
+- Use `.ai-harness/local/` for per-session notes, scratch work, and other high-churn local state. Do not commit local working-state files.
 
 ## Things That Must Not Change Silently
 
@@ -48,7 +49,7 @@ Without explicit user request and corresponding documentation updates, do not si
 
 If such a change is necessary:
 
-1. Create or update an ADR under `.ai-harness/decisions/`
+1. Create or update an ADR under `.ai-harness/shared/decisions/`
 2. Update the relevant architecture / state / commands / testing docs
 3. Then implement the code change
 
@@ -65,27 +66,25 @@ If such a change is necessary:
 2. Confirm current behavior from code and tests.
 3. Fix the bug with the smallest reasonable scope.
 4. Run relevant validation.
-5. Add or update a bug record under `.ai-harness/bugs/`.
-6. Update `.ai-harness/session-log.md`.
+5. Add or update a bug record under `.ai-harness/shared/bugs/`.
+6. Update `.ai-harness/shared/current-state.md` only if the fix changes durable project facts, risks, or boundaries.
 
 ## Feature Development Workflow
 
 1. Read relevant `.ai-harness/` docs and related code.
-2. Confirm whether behavior is already documented under `.ai-harness/features/`.
+2. Confirm whether behavior is already documented under `.ai-harness/shared/features/`.
 3. Implement with minimal scope.
 4. Run relevant validation.
-5. Update or add feature docs under `.ai-harness/features/`.
-6. Update `.ai-harness/project-state.md` if capability/state changed.
-7. Update `.ai-harness/session-log.md`.
+5. Update or add feature docs under `.ai-harness/shared/features/`.
+6. Update `.ai-harness/shared/current-state.md` if durable capability, known risk, or unresolved boundary changed.
 
 ## Architecture Change Workflow
 
 1. Confirm the change is actually required.
 2. Write or update an ADR first.
-3. Update `.ai-harness/architecture.md` and related docs.
+3. Update `.ai-harness/shared/architecture.md` and related docs.
 4. Implement the code change.
 5. Run broader validation than a normal local change.
-6. Update `.ai-harness/session-log.md`.
 
 ## Testing And Validation Requirements
 
@@ -110,3 +109,4 @@ If such a change is necessary:
 - Do not make standalone changes to `internal/translator/` unless broader work requires it.
 - `internal/runtime/executor/` should contain executors and their unit tests only; helpers go under `internal/runtime/executor/helps/`.
 - Timeouts are allowed only during credential acquisition, except the existing documented exceptions already present in the codebase.
+- Shared `.ai-harness` files must stay durable and collaboration-safe; volatile task tracking belongs under `.ai-harness/local/`.

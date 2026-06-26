@@ -4,6 +4,7 @@
 
 - Record user-visible and developer-relevant feature behavior.
 - Keep feature boundaries explicit for future changes.
+- Keep these documents durable and repository-scoped, not as temporary implementation journals.
 
 ## When To Add Or Update A Feature Document
 

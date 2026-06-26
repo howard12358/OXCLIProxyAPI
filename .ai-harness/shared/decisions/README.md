@@ -3,6 +3,7 @@
 ## Purpose
 
 - Record durable architecture and engineering decisions.
+- Store only decisions that are stable enough to matter across collaborators and sessions.
 - Required for changes that affect:
   - architecture
   - interfaces / public APIs
@@ -17,6 +18,7 @@
 - Change to config file format or CLI behavior
 - Change to deployment or topology model
 - Significant cross-module design choice that should not live only in code review or chat
+- Changes to the `.ai-harness/shared/` collaboration contract or repository documentation model
 
 ## Naming
 

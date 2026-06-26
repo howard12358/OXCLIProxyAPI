@@ -3,6 +3,7 @@
 ## Purpose
 
 - Record real bug fixes and recurring failure modes.
+- Keep these records stable enough to help future collaborators, not as temporary debugging notes.
 
 ## When To Add A Bug Document
 
