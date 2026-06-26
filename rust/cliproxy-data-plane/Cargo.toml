@@ -10,6 +10,7 @@ members = [
     "crates/runtime-config-client",
     "crates/router-core",
     "crates/upstream-runtime",
+    "crates/usage-events",
 ]
 resolver = "3"
 
@@ -24,6 +25,7 @@ cliproxy-common-types = { path = "crates/common-types" }
 cliproxy-router-core = { path = "crates/router-core" }
 cliproxy-runtime-config-client = { path = "crates/runtime-config-client" }
 cliproxy-upstream-runtime = { path = "crates/upstream-runtime" }
+cliproxy-usage-events = { path = "crates/usage-events" }
 futures-util = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

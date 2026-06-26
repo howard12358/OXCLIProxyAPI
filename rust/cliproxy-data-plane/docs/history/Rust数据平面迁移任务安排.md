@@ -72,7 +72,7 @@ rust/cliproxy-data-plane/
 - 里程碑 5：已完成 MVP 所需最小子集
 - 里程碑 6：已完成 MVP 所需最小子集
 - 里程碑 7：未开始
-- 里程碑 8：未开始
+- 里程碑 8：已完成最小 CPA usage 闭环
 
 这里的“已完成首版可用闭环”特指当前收敛目标：
 
@@ -100,6 +100,25 @@ rust/cliproxy-data-plane/
   - `POST /backend-api/codex/responses`
     可转发到 Rust 数据平面
 - 本地已有 `make dev-stack` 联调入口，可同时拉起 Go 管理平面与 Rust 数据平面
+
+### 当前里程碑状态总览（2026-06-26）
+
+| 里程碑 | 当前状态 | 未完成项 | 建议优先级 |
+| --- | --- | --- | --- |
+| 里程碑 0：基础骨架与契约 | 已完成 | 无明显缺口 | 低 |
+| 里程碑 1：Snapshot Client 与运行时状态 | 已完成 | 指标与运维输出仍偏弱，但不影响该里程碑主目标 | 低 |
+| 里程碑 2：`/v1/responses` 接入垂直切片 | 已完成 | 可继续补更多下游断连清理与样本覆盖 | 中 |
+| 里程碑 3：OpenAI / Codex 上游执行运行时 | 已完成首版可用闭环 | `usage` 提取尚未形成独立输出链路；更完整的日志脱敏、预提交重试分类与运维侧输出仍可继续收口 | 中高 |
+| 里程碑 4：Router Core v1 | 已完成收敛版本 | scheduler 指标、auth 健康信号对外化仍不完整 | 中 |
+| 里程碑 5：协议转换 IR v1 | 已完成 MVP 最小子集 | 没有独立 `protocol-translate` crate；canonical IR、parser/emitter 仍未正式抽象；翻译逻辑仍部分留在 `responses` 垂直链路里 | 中高 |
+| 里程碑 6：SSE 修复与行为对齐 | 已完成 MVP 最小子集 | 缺少与 Go 全量 fixtures 的系统性 parity tests；malformed stream 回归覆盖还不算完整 | 高 |
+| 里程碑 7：扩展路由与 Provider | 未开始 | `/v1/chat/completions`、`/v1/messages`、Claude adapter、Gemini adapter、更多 provider/model routing 组合都还没接入 Rust 数据平面 | 低 |
+| 里程碑 8：Usage 事件与运维集成 | 已完成最小 CPA usage 闭环 | `usage-events` 已改为 CPA usage queue payload 形状，但仍只有 log sink；Rust 侧尚未直接暴露完整 redis 订阅 / pop 协议；auth 健康信号沉淀、cooldown 建议、runbook 都还没完整落地 | 最高 |
+
+补充说明：
+
+- 如果目标是“尽快把 Rust 数据平面变成可安全切流的生产候选”，优先顺序应是：里程碑 8、里程碑 6、里程碑 3、里程碑 5、里程碑 7。
+- 核心原因不是功能路由数量不够，而是 usage/指标/运维闭环和与 Go 行为对齐证明仍不足。
 
 ### 里程碑 0：基础骨架与契约
 

@@ -263,6 +263,7 @@ dependencies = [
  "cliproxy-router-core",
  "cliproxy-runtime-config-client",
  "cliproxy-upstream-runtime",
+ "cliproxy-usage-events",
  "futures-util",
  "http-body-util",
  "serde",
@@ -316,6 +317,16 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "cliproxy-usage-events"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

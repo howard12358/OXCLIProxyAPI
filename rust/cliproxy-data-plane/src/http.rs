@@ -1,6 +1,7 @@
 use axum::{
     Json, Router,
     extract::{State, rejection::JsonRejection},
+    http::HeaderMap,
     response::IntoResponse,
     routing::{get, post},
 };
@@ -14,6 +15,7 @@ use tracing::info;
 
 use crate::responses::{ResponsesRequest, handle_responses};
 use crate::runtime::{RuntimeInfo, RuntimeStateHandle};
+use crate::telemetry::AppTelemetry;
 
 #[derive(Clone)]
 struct AppState {
@@ -21,6 +23,7 @@ struct AppState {
     snapshot_client: Option<RuntimeConfigClient>,
     router_core: RouterCore,
     upstream: UpstreamRuntime,
+    telemetry: AppTelemetry,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,6 +66,7 @@ pub fn router_with_snapshot_client(
         snapshot_client,
         router_core: RouterCore::new(),
         upstream,
+        telemetry: AppTelemetry::new(),
     };
     Router::new()
         .route("/healthz", get(healthz))
@@ -113,11 +117,26 @@ async fn get_runtime_snapshot(State(state): State<AppState>) -> impl IntoRespons
 
 async fn post_responses(
     State(state): State<AppState>,
+    headers: HeaderMap,
     payload: Result<Json<ResponsesRequest>, JsonRejection>,
 ) -> impl IntoResponse {
     match payload {
         Ok(Json(request)) => {
-            handle_responses(state.runtime, state.router_core, state.upstream, request).await
+            let request_id = headers
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            handle_responses(
+                state.runtime,
+                state.router_core,
+                state.upstream,
+                state.telemetry,
+                request,
+                request_id,
+            )
+            .await
         }
         Err(err) => (
             axum::http::StatusCode::BAD_REQUEST,

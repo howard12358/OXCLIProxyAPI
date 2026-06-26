@@ -69,11 +69,13 @@
 - Responsibility:
   - serve `/v1/responses`
   - repair and normalize SSE frames on the `/v1/responses` HTTP streaming path
+  - emit CPA-shaped `/v1/responses` usage queue payloads asynchronously through a log-backed producer
   - consume runtime snapshot from Go
   - expose health / readiness / runtime snapshot observation
 - Entrypoints:
   - `rust/cliproxy-data-plane/src/main.rs`
   - `rust/cliproxy-data-plane/src/http.rs`
+  - `rust/cliproxy-data-plane/src/telemetry.rs`
 - Config:
   - Rust CLI flags / env vars
   - Go runtime snapshot

@@ -13,6 +13,8 @@ use futures_util::stream::Stream;
 use serde_json::json;
 use tracing::info;
 
+use crate::telemetry::{RequestTelemetry, StreamCompletionGuard};
+
 use super::{
     MockCompletedResponse, MockSseEvent, RequestMetadata, ResponsesRequest, build_output_text,
     estimate_input_tokens, estimate_output_tokens, estimate_output_tokens_from_text,
@@ -23,6 +25,7 @@ pub(super) fn non_streaming_response(
     _request: ResponsesRequest,
     request_meta: RequestMetadata,
     execution_plan: &ExecutionPlan,
+    telemetry: RequestTelemetry,
 ) -> Result<Json<MockCompletedResponse>> {
     let response_id = mock_response_id(&execution_plan.model);
     let output_text = build_output_text(&request_meta);
@@ -42,9 +45,14 @@ pub(super) fn non_streaming_response(
         "output_tokens": estimate_output_tokens(&output),
         "total_tokens": estimate_input_tokens(&request_meta) + estimate_output_tokens(&output)
     });
+    telemetry.observe_response_json_value(&json!({
+        "id": response_id,
+        "status": "completed",
+        "usage": usage
+    }));
 
     Ok(Json(MockCompletedResponse {
-        id: response_id,
+        id: mock_response_id(&execution_plan.model),
         object: "response",
         model: execution_plan.model.clone(),
         status: "completed",
@@ -57,6 +65,7 @@ pub(super) async fn streaming_response(
     request: ResponsesRequest,
     request_meta: RequestMetadata,
     execution_plan: &ExecutionPlan,
+    telemetry: RequestTelemetry,
 ) -> Result<Response<Body>> {
     let start = Instant::now();
     let events = mock_upstream_events(&request, &request_meta, execution_plan)?;
@@ -71,7 +80,14 @@ pub(super) async fn streaming_response(
         .ok_or_else(|| anyhow::anyhow!("mock upstream produced no frames during bootstrap"))?;
     let first_byte_ms = start.elapsed().as_millis() as u64;
 
-    let tail_stream = frame_stream(first_frame.clone(), frames.collect(), start);
+    telemetry.mark_first_byte();
+    telemetry.observe_sse_frame(&first_frame);
+    let tail_stream = frame_stream(
+        first_frame.clone(),
+        frames.collect(),
+        start,
+        telemetry.clone(),
+    );
     let body = Body::from_stream(tail_stream);
 
     let mut response = Response::new(body);
@@ -104,14 +120,18 @@ fn frame_stream(
     first_frame: Bytes,
     rest: Vec<Bytes>,
     start: Instant,
+    telemetry: RequestTelemetry,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     stream! {
+        let mut completion_guard = StreamCompletionGuard::new(telemetry.clone());
         yield Ok(first_frame);
         for frame in rest {
+            telemetry.observe_sse_frame(&frame);
             yield Ok(frame);
         }
         let stream_duration_ms = start.elapsed().as_millis() as u64;
         info!(stream_duration_ms, "responses stream completed");
+        completion_guard.finish_success();
     }
 }
 

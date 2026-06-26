@@ -13,6 +13,8 @@ use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tracing::{debug, info, warn};
 
+use crate::telemetry::{RequestTelemetry, StreamCompletionGuard, classify_auth_failure_reason};
+
 use super::sse::{ResponsesSseFramer, extract_completed_response_from_sse};
 use super::{
     DEFAULT_CODEX_INSTRUCTIONS, ResponsesRequest, response_from_aggregated_json_body,
@@ -25,6 +27,7 @@ pub(super) async fn execute_real_upstream(
     snapshot: &RuntimeSnapshot,
     execution_plan: &ExecutionPlan,
     selected_auth: Option<&AuthRecord>,
+    telemetry: RequestTelemetry,
 ) -> Result<axum::http::Response<Body>> {
     let downstream_stream = request.stream;
     let aggregate_codex_stream = execution_plan.provider
@@ -56,6 +59,7 @@ pub(super) async fn execute_real_upstream(
         selected_auth,
         &upstream_request_template,
         snapshot.network.upstream_proxy.as_deref(),
+        &telemetry,
     )
     .await?;
 
@@ -63,23 +67,39 @@ pub(super) async fn execute_real_upstream(
         UpstreamExecutionResult::NonStreaming(response) => {
             let _provider = response.provider;
             let _events = response.events;
+            telemetry.observe_response_headers(&response.head.headers);
+            telemetry.mark_first_byte();
+            telemetry.observe_response_json_bytes(response.body.as_ref());
+            telemetry.finish_success();
             Ok(response_from_body(response.head, response.body))
         }
         UpstreamExecutionResult::Streaming(response) => {
             if aggregate_codex_stream {
                 let _provider = response.provider;
                 let _events = response.events;
-                let body = aggregate_streaming_response_body(response.first_chunk, response.stream)
-                    .await?;
+                telemetry.observe_response_headers(&response.head.headers);
+                let body = aggregate_streaming_response_body(
+                    response.first_chunk,
+                    response.stream,
+                    telemetry.clone(),
+                )
+                .await?;
+                telemetry.mark_first_byte();
+                telemetry.observe_response_json_bytes(body.as_ref());
+                telemetry.finish_success();
                 return Ok(response_from_aggregated_json_body(response.head, body));
             }
             let _provider = response.provider;
             let _events = response.events;
+            telemetry.observe_response_headers(&response.head.headers);
             let first_chunk = response.first_chunk;
             let tail = response.stream;
             let body = Body::from_stream(stream! {
+                let mut completion_guard = StreamCompletionGuard::new(telemetry.clone());
                 let mut framer = ResponsesSseFramer::default();
                 for frame in framer.push_chunk(first_chunk) {
+                    telemetry.mark_first_byte();
+                    telemetry.observe_sse_frame(&frame);
                     yield Ok::<Bytes, Infallible>(frame);
                 }
                 futures_util::pin_mut!(tail);
@@ -87,6 +107,8 @@ pub(super) async fn execute_real_upstream(
                     match item {
                         Ok(bytes) => {
                             for frame in framer.push_chunk(bytes) {
+                                telemetry.mark_first_byte();
+                                telemetry.observe_sse_frame(&frame);
                                 yield Ok(frame);
                             }
                         }
@@ -96,16 +118,23 @@ pub(super) async fn execute_real_upstream(
                                 serde_json::to_string(&err.to_string()).unwrap_or_else(|_| "\"upstream stream error\"".to_string())
                             ));
                             for pending in framer.finish() {
+                                telemetry.mark_first_byte();
+                                telemetry.observe_sse_frame(&pending);
                                 yield Ok(pending);
                             }
+                            telemetry.observe_sse_frame(&frame);
                             yield Ok(frame);
+                            completion_guard.finish_error();
                             break;
                         }
                     }
                 }
                 for frame in framer.finish() {
+                    telemetry.mark_first_byte();
+                    telemetry.observe_sse_frame(&frame);
                     yield Ok(frame);
                 }
+                completion_guard.finish_success();
             });
             Ok(response_with_stream(response.head, body))
         }
@@ -119,6 +148,7 @@ async fn execute_upstream_with_retries(
     selected_auth: Option<&AuthRecord>,
     request: &UpstreamRequest,
     proxy_override: Option<&str>,
+    telemetry: &RequestTelemetry,
 ) -> Result<UpstreamExecutionResult> {
     if let Some(auth) = selected_auth {
         if upstream.can_execute_for_auth(auth) {
@@ -130,6 +160,9 @@ async fn execute_upstream_with_retries(
                 {
                     Ok(response) => return Ok(response),
                     Err(err) if should_retry_auth_bound_error(&err) => {
+                        let reason = classify_auth_failure_reason(&err);
+                        telemetry.record_auth_failure(reason);
+                        telemetry.record_auth_retry(reason);
                         info!(
                             failed_auth_id = %candidate.id,
                             next_retry_candidates = ?execution_plan.retry_candidates,
@@ -138,7 +171,10 @@ async fn execute_upstream_with_retries(
                         );
                         last_error = Some(err);
                     }
-                    Err(err) => return Err(err),
+                    Err(err) => {
+                        telemetry.record_auth_failure(classify_auth_failure_reason(&err));
+                        return Err(err);
+                    }
                 }
             }
             if let Some(err) = last_error {
@@ -252,19 +288,23 @@ pub(super) fn normalize_upstream_request(
 async fn aggregate_streaming_response_body(
     first_chunk: Bytes,
     mut tail: cliproxy_upstream_runtime::ByteStream,
+    telemetry: RequestTelemetry,
 ) -> Result<Bytes> {
     let mut framer = ResponsesSseFramer::default();
     let mut combined = Vec::new();
     for frame in framer.push_chunk(first_chunk) {
+        telemetry.observe_sse_frame(&frame);
         combined.extend_from_slice(&frame);
     }
     while let Some(item) = tail.next().await {
         let bytes = item?;
         for frame in framer.push_chunk(bytes) {
+            telemetry.observe_sse_frame(&frame);
             combined.extend_from_slice(&frame);
         }
     }
     for frame in framer.finish() {
+        telemetry.observe_sse_frame(&frame);
         combined.extend_from_slice(&frame);
     }
     extract_completed_response_from_sse(&combined)

@@ -206,7 +206,7 @@ fn sse_frames(bytes: &[u8]) -> Vec<&[u8]> {
     frames
 }
 
-pub(super) fn sse_data_payload(frame: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn sse_data_payload(frame: &[u8]) -> Option<Vec<u8>> {
     let text = std::str::from_utf8(frame).ok()?;
     let mut lines = Vec::new();
     for line in text.lines() {

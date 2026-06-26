@@ -9,6 +9,7 @@ use cliproxy_router_core::{
 use cliproxy_upstream_runtime::UpstreamRuntime;
 
 use crate::runtime::RuntimeStateHandle;
+use crate::telemetry::AppTelemetry;
 
 use super::mock::{non_streaming_response, streaming_response};
 use super::upstream::{execute_real_upstream, log_upstream_failure};
@@ -18,9 +19,19 @@ pub async fn handle_responses(
     runtime: RuntimeStateHandle,
     router_core: RouterCore,
     upstream: UpstreamRuntime,
+    telemetry: AppTelemetry,
     request: ResponsesRequest,
+    request_id: Option<String>,
 ) -> Response<Body> {
+    let request_telemetry = telemetry.new_request(
+        &request.model,
+        request.stream,
+        runtime.current_snapshot().as_deref(),
+        request_id,
+    );
+
     if !runtime.responses_route_enabled() {
+        request_telemetry.finish_error(404, "responses route is disabled by runtime snapshot");
         return error_response(
             axum::http::StatusCode::NOT_FOUND,
             "responses route is disabled by runtime snapshot",
@@ -31,6 +42,7 @@ pub async fn handle_responses(
     let request_meta = match extract_metadata(&request) {
         Ok(meta) => meta,
         Err(err) => {
+            request_telemetry.finish_error(400, &err.to_string());
             return error_response(
                 axum::http::StatusCode::BAD_REQUEST,
                 &err.to_string(),
@@ -41,6 +53,7 @@ pub async fn handle_responses(
     let (snapshot, execution_plan) = match build_execution_plan(&runtime, &router_core, &request) {
         Ok(resolved) => resolved,
         Err(err) => {
+            request_telemetry.finish_error(503, &err.to_string());
             return error_response(
                 axum::http::StatusCode::SERVICE_UNAVAILABLE,
                 &err.to_string(),
@@ -49,6 +62,7 @@ pub async fn handle_responses(
         }
     };
     let selected_auth = auth_for_plan(snapshot.as_ref(), &execution_plan);
+    request_telemetry.bind_execution_plan(&execution_plan, selected_auth);
 
     if upstream_enabled_for_request(&upstream, selected_auth) {
         return match execute_real_upstream(
@@ -57,12 +71,14 @@ pub async fn handle_responses(
             snapshot.as_ref(),
             &execution_plan,
             selected_auth,
+            request_telemetry.clone(),
         )
         .await
         {
             Ok(response) => response,
             Err(err) => {
                 log_upstream_failure(&err, &execution_plan);
+                request_telemetry.finish_error(502, &err.to_string());
                 error_response(
                     axum::http::StatusCode::BAD_GATEWAY,
                     &err.to_string(),
@@ -73,22 +89,44 @@ pub async fn handle_responses(
     }
 
     if request.stream {
-        match streaming_response(request, request_meta, &execution_plan).await {
+        match streaming_response(
+            request,
+            request_meta,
+            &execution_plan,
+            request_telemetry.clone(),
+        )
+        .await
+        {
             Ok(response) => response,
-            Err(err) => error_response(
-                axum::http::StatusCode::BAD_GATEWAY,
-                &err.to_string(),
-                "upstream_error",
-            ),
+            Err(err) => {
+                request_telemetry.finish_error(502, &err.to_string());
+                error_response(
+                    axum::http::StatusCode::BAD_GATEWAY,
+                    &err.to_string(),
+                    "upstream_error",
+                )
+            }
         }
     } else {
-        match non_streaming_response(request, request_meta, &execution_plan) {
-            Ok(response) => response.into_response(),
-            Err(err) => error_response(
-                axum::http::StatusCode::BAD_GATEWAY,
-                &err.to_string(),
-                "upstream_error",
-            ),
+        match non_streaming_response(
+            request,
+            request_meta,
+            &execution_plan,
+            request_telemetry.clone(),
+        ) {
+            Ok(response) => {
+                request_telemetry.mark_first_byte();
+                request_telemetry.finish_success();
+                response.into_response()
+            }
+            Err(err) => {
+                request_telemetry.finish_error(502, &err.to_string());
+                error_response(
+                    axum::http::StatusCode::BAD_GATEWAY,
+                    &err.to_string(),
+                    "upstream_error",
+                )
+            }
         }
     }
 }

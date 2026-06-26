@@ -6,7 +6,7 @@
 
 - 基于 `tokio` 的二进制服务
 - 基于 `axum` 的 HTTP 服务
-- 基础健康检查接口：`/healthz`、`/readyz`
+- 基础健康检查与运行时观测接口：`/healthz`、`/readyz`
 - 基于命令行和环境变量的监听地址与日志级别配置
 - 里程碑 0 所需的 workspace 基础结构
 - runtime snapshot 契约基础类型
@@ -14,6 +14,7 @@
 - snapshot 校验、版本比较和运行时状态切换
 - `/v1/responses` handler / upstream / SSE / mock 分层实现
 - OpenAI / Codex 上游执行运行时 v1
+- `/v1/responses` 的最小 CPA usage queue 闭环
 
 ## 当前目录结构
 
@@ -27,6 +28,7 @@ rust/cliproxy-data-plane/
   crates/
     common-types/
     runtime-config-client/
+    usage-events/
   src/
     main.rs
     responses.rs
@@ -35,6 +37,7 @@ rust/cliproxy-data-plane/
       upstream.rs
       sse.rs
       mock.rs
+    telemetry.rs
 ```
 
 文档入口：
@@ -147,4 +150,4 @@ make run BIND_ADDR=127.0.0.1:4210
 
 ## 下一步
 
-- 开始实现 router-core 与更明确的 auth 选择逻辑
+- 补齐 CPA redis usage 协议侧的对外消费链路

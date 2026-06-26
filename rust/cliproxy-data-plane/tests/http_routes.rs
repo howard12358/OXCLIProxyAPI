@@ -765,3 +765,20 @@ async fn responses_route_retries_next_auth_after_retryable_codex_failure() {
     assert_eq!(payload["object"], "response");
     assert_eq!(payload["status"], "completed");
 }
+
+#[tokio::test]
+async fn metrics_endpoint_is_not_exposed() {
+    let app = router(test_runtime(true), test_upstream());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/metrics")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("call app");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

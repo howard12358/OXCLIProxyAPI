@@ -10,7 +10,7 @@ use serde_json::Value;
 
 mod handler;
 mod mock;
-mod sse;
+pub(crate) mod sse;
 mod upstream;
 
 pub use handler::handle_responses;

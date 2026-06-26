@@ -55,7 +55,9 @@
 - `rust/cliproxy-data-plane/src/runtime.rs`
   - Hold current runtime snapshot and runtime metadata
 - `rust/cliproxy-data-plane/src/http.rs`
-  - Rust HTTP routes
+  - Rust HTTP routes for health, readiness, snapshot inspection, notify, and `/v1/responses`
+- `rust/cliproxy-data-plane/src/telemetry.rs`
+  - Request lifecycle telemetry, usage extraction, and CPA-shaped async usage payload emission
 - `rust/cliproxy-data-plane/src/responses.rs`
   - Rust `/v1/responses` parent module with shared request/response types, helpers, and unit tests
 - `rust/cliproxy-data-plane/src/responses/`
@@ -64,6 +66,8 @@
   - `upstream.rs` real upstream execution, request normalization, and auth retry
   - `sse.rs` SSE framing and completed-output repair
   - `mock.rs` mock fallback responses
+- `rust/cliproxy-data-plane/crates/usage-events/`
+  - CPA-shaped usage queue payload type and async producer for non-blocking sinks
 
 ## Main Data Flow
 
@@ -72,7 +76,7 @@
 - Go -> Rust runtime-config path:
   - Go config/auth state -> runtime snapshot -> Rust pull / apply
 - Rust responses path:
-  - request -> runtime snapshot + router core -> upstream runtime -> normalized downstream response
+  - request -> runtime snapshot + router core -> upstream runtime -> normalized downstream response -> CPA-shaped usage payload emission
 
 ## Main Control Flow
 

@@ -8,6 +8,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Go server exposes API routes, management routes, auth handling, model registry, watcher-based reload, and SDK hooks.
 - Rust data plane exists as a separate workspace and can serve `/v1/responses`.
 - Rust data plane consumes Go-exported runtime snapshot by file or HTTP.
+- Rust data plane now aligns milestone 8 with CPA usage-queue semantics instead of exposing a separate Prometheus-style route.
 
 ## Implemented Capabilities
 
@@ -22,6 +23,8 @@ This document records durable repository-level state. It is not a per-session ta
   - runtime snapshot load / refresh
   - `/v1/responses`
   - `/v1/responses` SSE frame repair and completed-output repair on the HTTP streaming path
+  - CPA-shaped usage queue payload emission for `/v1/responses` when `usage_queue.enabled=true` and `usage_queue.backend=redis`
+  - async usage payload production with log-backed sink for `/v1/responses` requests
   - snapshot notify endpoint
   - runtime snapshot observation endpoint
 
@@ -37,6 +40,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Runtime snapshot export / refresh / observability
 - Dev stack tooling in `Makefile`
 - Unified upstream proxy behavior between Go and Rust
+- CPA-aligned Rust usage queue integration for `/v1/responses`
 
 ## Frozen Key Decisions
 
@@ -51,6 +55,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Rust data-plane productization work may diverge from Go behavior if proxy, routing, or auth semantics are changed in only one runtime.
 - Test coverage appears stronger in selected areas than for full end-to-end production flows.
 - Some architectural intent lives in docs and current worktree changes, not only in released code.
+- Rust currently emits CPA-shaped usage payloads but does not yet expose the full CPA redis subscription/pop protocol from the Rust process.
 
 ## Collaboration Boundaries
 
