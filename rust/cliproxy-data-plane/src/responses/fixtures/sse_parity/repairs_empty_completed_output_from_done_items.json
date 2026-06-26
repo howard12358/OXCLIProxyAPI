@@ -1,0 +1,18 @@
+{
+  "name": "repairs_empty_completed_output_from_done_items",
+  "chunks": [
+    "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs-1\",\"summary\":[]}}",
+    "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"id\":\"fc-1\",\"call_id\":\"call-1\",\"name\":\"shell\",\"arguments\":\"{\\\"cmd\\\":\\\"pwd\\\"}\",\"status\":\"completed\"}}",
+    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"output\":[]}}"
+  ],
+  "expected_frames": [
+    "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs-1\",\"summary\":[]}}\n\n",
+    "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"id\":\"fc-1\",\"call_id\":\"call-1\",\"name\":\"shell\",\"arguments\":\"{\\\"cmd\\\":\\\"pwd\\\"}\",\"status\":\"completed\"}}\n\n",
+    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"output\":[{\"id\":\"rs-1\",\"summary\":[],\"type\":\"reasoning\"},{\"arguments\":\"{\\\"cmd\\\":\\\"pwd\\\"}\",\"call_id\":\"call-1\",\"id\":\"fc-1\",\"name\":\"shell\",\"status\":\"completed\",\"type\":\"function_call\"}]}}\n\n"
+  ],
+  "expected_event_types": [
+    "response.output_item.done",
+    "response.output_item.done",
+    "response.completed"
+  ]
+}

@@ -22,9 +22,12 @@ This document records durable repository-level state. It is not a per-session ta
   - health / readiness
   - runtime snapshot load / refresh
   - `/v1/responses`
+  - explicit minimal request IR + stream-event IR inside the `/v1/responses` pipeline
   - `/v1/responses` SSE frame repair and completed-output repair on the HTTP streaming path
   - CPA-shaped usage queue payload emission for `/v1/responses` when `usage_queue.enabled=true` and `usage_queue.backend=redis`
   - async usage payload production with log-backed sink for `/v1/responses` requests
+  - pre-commit auth retry classification for `/v1/responses`
+  - upstream request/response redaction helpers for logging
   - snapshot notify endpoint
   - runtime snapshot observation endpoint
 
@@ -56,6 +59,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Test coverage appears stronger in selected areas than for full end-to-end production flows.
 - Some architectural intent lives in docs and current worktree changes, not only in released code.
 - Rust currently emits CPA-shaped usage payloads but does not yet expose the full CPA redis subscription/pop protocol from the Rust process.
+- Rust milestone-6 parity coverage now includes fixture-driven SSE framer checks derived from Go stream-repair samples, including malformed blank-line event/data cases, but it is still not a full Go fixture mirror.
 
 ## Collaboration Boundaries
 

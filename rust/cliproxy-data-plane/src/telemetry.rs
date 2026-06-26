@@ -129,10 +129,9 @@ impl RequestTelemetry {
     pub fn record_auth_retry(&self, _reason: &str) {}
 
     pub fn observe_response_json_value(&self, value: &Value) {
-        if let Some(id) = value.get("id").and_then(Value::as_str) {
-            self.set_response_id(id.to_string());
+        if let Some(observation) = UsageObservation::from_response_json(value) {
+            self.apply_usage_observation(observation);
         }
-        self.observe_usage_value(value.get("usage"));
     }
 
     pub fn observe_response_headers(&self, headers: &BTreeMap<String, String>) {
@@ -154,18 +153,8 @@ impl RequestTelemetry {
         let Ok(value) = serde_json::from_slice::<Value>(&payload) else {
             return;
         };
-        match value
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-        {
-            "response.usage" => self.observe_usage_value(value.get("usage")),
-            "response.completed" => {
-                if let Some(response) = value.get("response") {
-                    self.observe_response_json_value(response);
-                }
-            }
-            _ => {}
+        if let Some(observation) = UsageObservation::from_sse_value(&value) {
+            self.apply_usage_observation(observation);
         }
     }
 
@@ -242,58 +231,37 @@ impl RequestTelemetry {
     }
 
     fn observe_usage_value(&self, usage: Option<&Value>) {
-        let Some(usage) = usage else {
+        let Some(tokens) = UsageObservation::tokens_from_usage(usage) else {
             return;
         };
-        let input_tokens = usage
-            .get("input_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or_default();
-        let output_tokens = usage
-            .get("output_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or_default();
-        let reasoning_tokens = usage
-            .get("reasoning_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or_default();
-        let cached_tokens = usage
-            .get("cached_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or_default();
-        let cache_read_tokens = usage
-            .get("cache_read_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or_default();
-        let cache_creation_tokens = usage
-            .get("cache_creation_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or_default();
-        let total_tokens = usage
-            .get("total_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(input_tokens.saturating_add(output_tokens));
         self.state
             .input_tokens
-            .store(input_tokens, Ordering::SeqCst);
+            .store(tokens.input_tokens, Ordering::SeqCst);
         self.state
             .output_tokens
-            .store(output_tokens, Ordering::SeqCst);
+            .store(tokens.output_tokens, Ordering::SeqCst);
         self.state
             .reasoning_tokens
-            .store(reasoning_tokens, Ordering::SeqCst);
+            .store(tokens.reasoning_tokens, Ordering::SeqCst);
         self.state
             .cached_tokens
-            .store(cached_tokens, Ordering::SeqCst);
+            .store(tokens.cached_tokens, Ordering::SeqCst);
         self.state
             .cache_read_tokens
-            .store(cache_read_tokens, Ordering::SeqCst);
+            .store(tokens.cache_read_tokens, Ordering::SeqCst);
         self.state
             .cache_creation_tokens
-            .store(cache_creation_tokens, Ordering::SeqCst);
+            .store(tokens.cache_creation_tokens, Ordering::SeqCst);
         self.state
             .total_tokens
-            .store(total_tokens, Ordering::SeqCst);
+            .store(tokens.total_tokens, Ordering::SeqCst);
+    }
+
+    fn apply_usage_observation(&self, observation: UsageObservation) {
+        if let Some(response_id) = observation.response_id.as_ref() {
+            self.set_response_id(response_id.clone());
+        }
+        self.observe_usage_value(Some(&observation.usage_value()));
     }
 
     fn set_provider(&self, value: &str) {
@@ -404,6 +372,99 @@ impl RequestTelemetry {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UsageObservation {
+    response_id: Option<String>,
+    tokens: UsageQueueTokens,
+}
+
+impl UsageObservation {
+    fn from_response_json(value: &Value) -> Option<Self> {
+        Some(Self {
+            response_id: value
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            tokens: Self::tokens_from_usage(value.get("usage"))?,
+        })
+    }
+
+    #[cfg(test)]
+    fn from_sse_frame(frame: &[u8]) -> Option<Self> {
+        let payload = crate::responses::sse::sse_data_payload(frame)?;
+        let value = serde_json::from_slice::<Value>(&payload).ok()?;
+        Self::from_sse_value(&value)
+    }
+
+    fn from_sse_value(value: &Value) -> Option<Self> {
+        match value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+        {
+            "response.usage" => Some(Self {
+                response_id: None,
+                tokens: Self::tokens_from_usage(value.get("usage"))?,
+            }),
+            "response.completed" => Self::from_response_json(value.get("response")?),
+            _ => None,
+        }
+    }
+
+    fn tokens_from_usage(usage: Option<&Value>) -> Option<UsageQueueTokens> {
+        let usage = usage?;
+        let input_tokens = usage
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let output_tokens = usage
+            .get("output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let reasoning_tokens = usage
+            .get("reasoning_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let cached_tokens = usage
+            .get("cached_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let cache_read_tokens = usage
+            .get("cache_read_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let cache_creation_tokens = usage
+            .get("cache_creation_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let total_tokens = usage
+            .get("total_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(input_tokens.saturating_add(output_tokens));
+        Some(UsageQueueTokens {
+            input_tokens,
+            output_tokens,
+            reasoning_tokens,
+            cached_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
+            total_tokens,
+        })
+    }
+
+    fn usage_value(&self) -> Value {
+        serde_json::json!({
+            "input_tokens": self.tokens.input_tokens,
+            "output_tokens": self.tokens.output_tokens,
+            "reasoning_tokens": self.tokens.reasoning_tokens,
+            "cached_tokens": self.tokens.cached_tokens,
+            "cache_read_tokens": self.tokens.cache_read_tokens,
+            "cache_creation_tokens": self.tokens.cache_creation_tokens,
+            "total_tokens": self.tokens.total_tokens,
+        })
+    }
+}
+
 pub struct StreamCompletionGuard {
     telemetry: RequestTelemetry,
     completed: bool,
@@ -471,6 +532,7 @@ fn now_rfc3339() -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::UsageObservation;
     use std::collections::BTreeMap;
 
     use cliproxy_common_types::{
@@ -552,6 +614,43 @@ mod tests {
             payload.response_headers.get("x-upstream-request-id"),
             Some(&vec!["upstream-1".to_string()])
         );
+    }
+
+    #[test]
+    fn usage_observation_extracts_usage_and_response_id_from_response_json() {
+        let observation = UsageObservation::from_response_json(&json!({
+            "id": "resp_1",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "reasoning_tokens": 3,
+                "cached_tokens": 4,
+                "cache_read_tokens": 5,
+                "cache_creation_tokens": 6,
+                "total_tokens": 48
+            }
+        }))
+        .expect("usage observation");
+
+        assert_eq!(observation.response_id.as_deref(), Some("resp_1"));
+        assert_eq!(observation.tokens.input_tokens, 10);
+        assert_eq!(observation.tokens.output_tokens, 20);
+        assert_eq!(observation.tokens.reasoning_tokens, 3);
+        assert_eq!(observation.tokens.cached_tokens, 4);
+        assert_eq!(observation.tokens.cache_read_tokens, 5);
+        assert_eq!(observation.tokens.cache_creation_tokens, 6);
+        assert_eq!(observation.tokens.total_tokens, 48);
+    }
+
+    #[test]
+    fn usage_observation_extracts_usage_from_completed_sse_frame() {
+        let frame = b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_2\",\"usage\":{\"input_tokens\":7,\"output_tokens\":9,\"total_tokens\":16}}}\n\n";
+        let observation = UsageObservation::from_sse_frame(frame).expect("usage observation");
+
+        assert_eq!(observation.response_id.as_deref(), Some("resp_2"));
+        assert_eq!(observation.tokens.input_tokens, 7);
+        assert_eq!(observation.tokens.output_tokens, 9);
+        assert_eq!(observation.tokens.total_tokens, 16);
     }
 
     #[tokio::test]

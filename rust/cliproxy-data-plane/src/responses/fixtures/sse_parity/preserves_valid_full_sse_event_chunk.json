@@ -1,0 +1,12 @@
+{
+  "name": "preserves_valid_full_sse_event_chunk",
+  "chunks": [
+    "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\"}}\n\n"
+  ],
+  "expected_frames": [
+    "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\"}}\n\n"
+  ],
+  "expected_event_types": [
+    "response.created"
+  ]
+}

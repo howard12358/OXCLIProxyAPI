@@ -32,6 +32,12 @@ Rust route-focused test:
 cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test http_routes
 ```
 
+Rust SSE parity test:
+
+```bash
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml responses::tests::sse_framer_matches_go_parity_fixtures -- --exact
+```
+
 ## Manual Validation
 
 - Start Go/Rust local stack:
@@ -125,6 +131,7 @@ cargo test --workspace --manifest-path rust/cliproxy-data-plane/Cargo.toml
 - Full provider behavior matrix is broad; not every path is likely covered equally.
 - Multi-instance Rust data-plane lifecycle coverage is `待确认`.
 - Some validation currently depends on local manual stack checks and snapshot inspection.
+- Rust SSE parity coverage is better for selected Go stream-repair and malformed-stream samples than before, but the fixture set is still partial rather than exhaustive.
 
 ## If Tests Are Missing
 

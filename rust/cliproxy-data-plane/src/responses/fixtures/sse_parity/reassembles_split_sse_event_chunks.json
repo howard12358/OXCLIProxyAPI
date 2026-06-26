@@ -1,0 +1,14 @@
+{
+  "name": "reassembles_split_sse_event_chunks",
+  "chunks": [
+    "event: response.created",
+    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\"}}",
+    "\n"
+  ],
+  "expected_frames": [
+    "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\"}}\n\n"
+  ],
+  "expected_event_types": [
+    "response.created"
+  ]
+}

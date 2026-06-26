@@ -1,0 +1,15 @@
+{
+  "name": "repairs_multiline_completed_payload",
+  "chunks": [
+    "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"arguments\":\"{}\"}}",
+    "data: {\"type\":\"response.completed\",\ndata: \"response\":{\"id\":\"resp-1\",\"output\":[]}}\n\n"
+  ],
+  "expected_frames": [
+    "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"arguments\":\"{}\"}}\n\n",
+    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"output\":[{\"arguments\":\"{}\",\"type\":\"function_call\"}]}}\n\n"
+  ],
+  "expected_event_types": [
+    "response.output_item.done",
+    "response.completed"
+  ]
+}

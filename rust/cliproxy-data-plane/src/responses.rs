@@ -10,6 +10,7 @@ use serde_json::Value;
 
 mod handler;
 mod mock;
+mod protocol;
 pub(crate) mod sse;
 mod upstream;
 
@@ -17,7 +18,7 @@ pub use handler::handle_responses;
 
 const DEFAULT_CODEX_INSTRUCTIONS: &str = "You are Codex. Fulfill the user's request.";
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ResponsesRequest {
     pub model: String,
     #[serde(default)]
@@ -249,6 +250,7 @@ fn should_skip_upstream_header(name: &str, body_rewritten: bool) -> bool {
 mod tests {
     use super::*;
     use cliproxy_common_types::routing::{ExecutionPlan, StickinessSource};
+    use serde::Deserialize;
     use serde_json::json;
 
     #[test]
@@ -345,6 +347,105 @@ mod tests {
     }
 
     #[test]
+    fn request_ir_emits_codex_payload_with_defaults_and_text_input_lifted_to_message() {
+        let request = ResponsesRequest {
+            model: "codex-latest".to_string(),
+            stream: false,
+            input: Some(json!("hello from ir")),
+            instructions: None,
+            metadata: Some(json!({"session_id":"sess_123"})),
+            store: None,
+        };
+        let plan = ExecutionPlan {
+            provider: cliproxy_common_types::upstream::ProviderKind::Codex,
+            model: "gpt-5.5".to_string(),
+            auth_id: "auth-1".to_string(),
+            retry_candidates: vec![],
+            stickiness_source: StickinessSource::Strategy,
+        };
+
+        let ir = protocol::ResponsesRequestIr::from_downstream_request(&request);
+        let emitted = ir.emit_upstream_request(&plan);
+
+        assert_eq!(emitted.model, "gpt-5.5");
+        assert_eq!(emitted.stream, request.stream);
+        assert_eq!(emitted.store, Some(false));
+        assert_eq!(
+            emitted.instructions.as_deref(),
+            Some(DEFAULT_CODEX_INSTRUCTIONS)
+        );
+        assert!(emitted.metadata.is_none());
+        assert_eq!(
+            emitted.input,
+            Some(json!([
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "hello from ir"
+                        }
+                    ]
+                }
+            ]))
+        );
+    }
+
+    #[test]
+    fn request_ir_preserves_non_codex_request_shape() {
+        let request = ResponsesRequest {
+            model: "gpt-5".to_string(),
+            stream: true,
+            input: Some(
+                json!([{"role":"user","content":[{"type":"input_text","text":"keep me"}]}]),
+            ),
+            instructions: Some("system".to_string()),
+            metadata: Some(json!({"client":"test"})),
+            store: Some(true),
+        };
+        let plan = ExecutionPlan {
+            provider: cliproxy_common_types::upstream::ProviderKind::OpenAi,
+            model: "gpt-5".to_string(),
+            auth_id: "auth-1".to_string(),
+            retry_candidates: vec![],
+            stickiness_source: StickinessSource::Strategy,
+        };
+
+        let ir = protocol::ResponsesRequestIr::from_downstream_request(&request);
+        let emitted = ir.emit_upstream_request(&plan);
+
+        assert_eq!(emitted, request);
+    }
+
+    #[test]
+    fn stream_event_ir_parses_output_item_done_and_completed_frames() {
+        let done = b"event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc-1\"}}\n\n";
+        let completed = b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"output\":[]}}\n\n";
+
+        let done_event = protocol::ResponsesStreamEventIr::from_sse_frame(done)
+            .expect("parse done frame")
+            .expect("stream event");
+        let completed_event = protocol::ResponsesStreamEventIr::from_sse_frame(completed)
+            .expect("parse completed frame")
+            .expect("stream event");
+
+        match done_event {
+            protocol::ResponsesStreamEventIr::OutputItemDone(done) => {
+                assert_eq!(done.output_index, Some(0));
+                assert_eq!(done.item["id"], "fc-1");
+            }
+            other => panic!("unexpected done event: {other:?}"),
+        }
+
+        match completed_event {
+            protocol::ResponsesStreamEventIr::Completed(completed) => {
+                assert_eq!(completed.response["id"], "resp-1");
+            }
+            other => panic!("unexpected completed event: {other:?}"),
+        }
+    }
+
+    #[test]
     fn extract_completed_response_from_sse_returns_response_payload() {
         let bytes = concat!(
             "event: response.created\n",
@@ -416,12 +517,58 @@ mod tests {
             "upstream codex error 429: {{\"error\":{{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\"}}}}"
         );
         assert!(upstream::should_retry_auth_bound_error(&err));
+        let classification = upstream::classify_precommit_retry(&err);
+        assert!(classification.should_retry());
+        assert_eq!(classification.reason(), "usage_limit_reached");
     }
 
     #[test]
     fn should_retry_auth_bound_error_rejects_generic_429() {
         let err = anyhow::anyhow!("upstream codex error 429: too many requests");
         assert!(!upstream::should_retry_auth_bound_error(&err));
+        let classification = upstream::classify_precommit_retry(&err);
+        assert!(!classification.should_retry());
+        assert_eq!(classification.reason(), "auth_429");
+    }
+
+    #[test]
+    fn classify_precommit_retry_marks_auth_failures_and_quota_as_retryable() {
+        let cases = [
+            (
+                "upstream codex error 401: {\"error\":{\"code\":\"invalid_api_key\"}}",
+                "auth_401",
+            ),
+            (
+                "upstream codex error 403: {\"error\":{\"code\":\"account_deactivated\"}}",
+                "auth_403",
+            ),
+            (
+                "upstream codex error 429: {\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\"}}",
+                "usage_limit_reached",
+            ),
+        ];
+
+        for (message, reason) in cases {
+            let err = anyhow::anyhow!(message);
+            let classification = upstream::classify_precommit_retry(&err);
+            assert!(classification.should_retry(), "{message}");
+            assert_eq!(classification.reason(), reason, "{message}");
+        }
+    }
+
+    #[test]
+    fn classify_precommit_retry_marks_other_upstream_failures_as_non_retryable() {
+        let cases = [
+            ("upstream openai error 500: boom", "other"),
+            ("upstream codex error 400: invalid_request", "other"),
+        ];
+
+        for (message, reason) in cases {
+            let err = anyhow::anyhow!(message);
+            let classification = upstream::classify_precommit_retry(&err);
+            assert!(!classification.should_retry(), "{message}");
+            assert_eq!(classification.reason(), reason, "{message}");
+        }
     }
 
     #[test]
@@ -480,5 +627,131 @@ mod tests {
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\n\n"
         );
         assert!(framer.finish().is_empty());
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct SseParityFixture {
+        name: String,
+        chunks: Vec<String>,
+        expected_frames: Vec<String>,
+        expected_event_types: Vec<String>,
+    }
+
+    #[test]
+    fn sse_framer_matches_go_parity_fixtures() {
+        for fixture in load_sse_parity_fixtures() {
+            let mut framer = sse::ResponsesSseFramer::default();
+            let mut actual_frames = Vec::new();
+            for chunk in fixture.chunks {
+                actual_frames.extend(
+                    framer
+                        .push_chunk(Bytes::from(chunk))
+                        .into_iter()
+                        .map(|frame| String::from_utf8(frame.to_vec()).expect("valid utf8")),
+                );
+            }
+            actual_frames.extend(
+                framer
+                    .finish()
+                    .into_iter()
+                    .map(|frame| String::from_utf8(frame.to_vec()).expect("valid utf8")),
+            );
+
+            assert_sse_frames_match(&fixture.name, &actual_frames, &fixture.expected_frames);
+
+            let actual_event_types = actual_frames
+                .iter()
+                .filter_map(|frame| {
+                    let payload = sse::sse_data_payload(frame.as_bytes())?;
+                    let value = serde_json::from_slice::<Value>(&payload).ok()?;
+                    value
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual_event_types, fixture.expected_event_types,
+                "fixture {} produced unexpected event sequence",
+                fixture.name
+            );
+        }
+    }
+
+    fn load_sse_parity_fixtures() -> Vec<SseParityFixture> {
+        [
+            include_str!("responses/fixtures/sse_parity/separates_data_only_chunks.json"),
+            include_str!(
+                "responses/fixtures/sse_parity/repairs_empty_completed_output_from_done_items.json"
+            ),
+            include_str!(
+                "responses/fixtures/sse_parity/repairs_mixed_indexed_and_unindexed_done_items.json"
+            ),
+            include_str!("responses/fixtures/sse_parity/repairs_multiline_completed_payload.json"),
+            include_str!("responses/fixtures/sse_parity/reassembles_split_sse_event_chunks.json"),
+            include_str!("responses/fixtures/sse_parity/preserves_valid_full_sse_event_chunk.json"),
+            include_str!("responses/fixtures/sse_parity/buffers_split_data_payload_chunks.json"),
+            include_str!(
+                "responses/fixtures/sse_parity/tolerates_blank_line_between_event_and_data.json"
+            ),
+            include_str!(
+                "responses/fixtures/sse_parity/drops_incomplete_trailing_data_chunk_on_flush.json"
+            ),
+        ]
+        .into_iter()
+        .map(|raw| serde_json::from_str(raw).expect("parse sse parity fixture"))
+        .collect()
+    }
+
+    fn assert_sse_frames_match(name: &str, actual: &[String], expected: &[String]) {
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "fixture {name} produced unexpected frame count"
+        );
+        for (index, (actual_frame, expected_frame)) in actual.iter().zip(expected).enumerate() {
+            let actual_event = sse_event_name(actual_frame);
+            let expected_event = sse_event_name(expected_frame);
+            assert_eq!(
+                actual_event, expected_event,
+                "fixture {name} frame {index} produced unexpected event header"
+            );
+
+            let actual_payload = sse::sse_data_payload(actual_frame.as_bytes());
+            let expected_payload = sse::sse_data_payload(expected_frame.as_bytes());
+            match (actual_payload, expected_payload) {
+                (Some(actual_payload), Some(expected_payload)) => {
+                    if actual_payload == b"[DONE]" || expected_payload == b"[DONE]" {
+                        assert_eq!(
+                            actual_payload, expected_payload,
+                            "fixture {name} frame {index} produced unexpected raw payload"
+                        );
+                    } else {
+                        let actual_value =
+                            serde_json::from_slice::<Value>(&actual_payload).expect("actual json");
+                        let expected_value = serde_json::from_slice::<Value>(&expected_payload)
+                            .expect("expected json");
+                        assert_eq!(
+                            actual_value, expected_value,
+                            "fixture {name} frame {index} produced unexpected payload"
+                        );
+                    }
+                }
+                (None, None) => assert_eq!(
+                    actual_frame, expected_frame,
+                    "fixture {name} frame {index} produced unexpected raw frame"
+                ),
+                _ => panic!("fixture {name} frame {index} mismatched data payload presence"),
+            }
+        }
+    }
+
+    fn sse_event_name(frame: &str) -> Option<&str> {
+        frame.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix("event:")
+                .map(str::trim_start)
+                .filter(|value| !value.is_empty())
+        })
     }
 }

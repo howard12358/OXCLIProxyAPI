@@ -1,0 +1,15 @@
+{
+  "name": "separates_data_only_chunks",
+  "chunks": [
+    "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"arguments\":\"{}\"}}",
+    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"output\":[]}}"
+  ],
+  "expected_frames": [
+    "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"arguments\":\"{}\"}}\n\n",
+    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"output\":[{\"type\":\"function_call\",\"arguments\":\"{}\"}]}}\n\n"
+  ],
+  "expected_event_types": [
+    "response.output_item.done",
+    "response.completed"
+  ]
+}

@@ -1,9 +1,12 @@
 use bytes::Bytes;
 use serde_json::Value;
 
+use super::protocol::ResponsesStreamEventIr;
+
 #[derive(Debug, Default)]
 pub(super) struct ResponsesSseFramer {
     pending: Vec<u8>,
+    pending_header: Option<Vec<u8>>,
     output_items: std::collections::BTreeMap<usize, Vec<u8>>,
     unindexed_output_items: Vec<Vec<u8>>,
 }
@@ -24,7 +27,9 @@ impl ResponsesSseFramer {
                 break;
             };
             let frame = self.pending.drain(..frame_len).collect::<Vec<_>>();
-            out.push(self.emit_frame(&frame));
+            if let Some(frame) = self.consume_frame(frame) {
+                out.push(frame);
+            }
         }
 
         if self.pending.iter().all(|b| b.is_ascii_whitespace()) {
@@ -33,13 +38,16 @@ impl ResponsesSseFramer {
         }
         if !self.pending.is_empty() && sse_can_emit_without_delimiter(&self.pending) {
             let frame = std::mem::take(&mut self.pending);
-            out.push(self.emit_frame(&frame));
+            if let Some(frame) = self.consume_frame(frame) {
+                out.push(frame);
+            }
         }
 
         out
     }
 
     pub(crate) fn finish(&mut self) -> Vec<Bytes> {
+        self.pending_header = None;
         if self.pending.is_empty() {
             return Vec::new();
         }
@@ -52,46 +60,68 @@ impl ResponsesSseFramer {
             return Vec::new();
         }
         let frame = std::mem::take(&mut self.pending);
-        vec![self.emit_frame(&frame)]
+        self.consume_frame(frame).into_iter().collect()
     }
 
     fn emit_frame(&mut self, frame: &[u8]) -> Bytes {
         self.repair_frame(frame)
     }
 
+    fn consume_frame(&mut self, frame: Vec<u8>) -> Option<Bytes> {
+        if is_header_only_sse_frame(&frame) {
+            self.pending_header = Some(trim_sse_frame_terminator(&frame).to_vec());
+            return None;
+        }
+
+        let merged = if let Some(header) = self.pending_header.take() {
+            if sse_has_field(&frame, b"data:") && !sse_has_field(&frame, b"event:") {
+                merge_sse_header_and_frame(&header, &frame)
+            } else {
+                frame
+            }
+        } else {
+            frame
+        };
+
+        Some(self.emit_frame(&merged))
+    }
+
     fn repair_frame(&mut self, frame: &[u8]) -> Bytes {
+        let event = match ResponsesStreamEventIr::from_sse_frame(frame) {
+            Ok(Some(event)) => event,
+            Ok(None) => return normalize_sse_frame_bytes(frame),
+            Err(_) => return normalize_sse_frame_bytes(frame),
+        };
+
+        match event {
+            ResponsesStreamEventIr::OutputItemDone(done) => {
+                self.record_output_item(&done.item, done.output_index);
+            }
+            ResponsesStreamEventIr::Completed(completed) => {
+                let repaired = self.repair_completed_response(&completed.response);
+                if repaired != completed.response {
+                    let mut payload = completed.payload;
+                    if let Some(response) = payload.get_mut("response") {
+                        *response = repaired;
+                    }
+                    return sse_frame_with_payload(frame, &payload);
+                }
+            }
+            ResponsesStreamEventIr::Done => return normalize_sse_frame_bytes(frame),
+            ResponsesStreamEventIr::OtherJson(_) | ResponsesStreamEventIr::NonJson(_) => {}
+        }
+
         let Some(payload) = sse_data_payload(frame) else {
             return normalize_sse_frame_bytes(frame);
         };
-        if payload.is_empty() || payload == b"[DONE]" {
+        if payload.is_empty() {
             return normalize_sse_frame_bytes(frame);
-        }
-        let Ok(value) = serde_json::from_slice::<Value>(&payload) else {
-            return normalize_sse_frame_bytes(frame);
-        };
-
-        match value
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-        {
-            "response.output_item.done" => self.record_output_item(&value),
-            "response.completed" => {
-                let repaired = self.repair_completed_payload(&value);
-                if repaired != value {
-                    return sse_frame_with_payload(frame, &repaired);
-                }
-            }
-            _ => {}
         }
 
         normalize_sse_frame_bytes(frame)
     }
 
-    fn record_output_item(&mut self, payload: &Value) {
-        let Some(item) = payload.get("item") else {
-            return;
-        };
+    fn record_output_item(&mut self, item: &Value, output_index: Option<usize>) {
         if !item.is_object()
             || item
                 .get("type")
@@ -105,20 +135,19 @@ impl ResponsesSseFramer {
             return;
         };
 
-        if let Some(index) = payload.get("output_index").and_then(Value::as_u64) {
-            self.output_items.insert(index as usize, item_raw);
+        if let Some(index) = output_index {
+            self.output_items.insert(index, item_raw);
             return;
         }
         self.unindexed_output_items.push(item_raw);
     }
 
-    fn repair_completed_payload(&self, payload: &Value) -> Value {
+    fn repair_completed_response(&self, response: &Value) -> Value {
         if self.output_items.is_empty() && self.unindexed_output_items.is_empty() {
-            return payload.clone();
+            return response.clone();
         }
-        let has_existing_output = payload
-            .get("response")
-            .and_then(|response| response.get("output"))
+        let has_existing_output = response
+            .get("output")
             .map(|output| {
                 !output.is_array()
                     || output
@@ -128,13 +157,13 @@ impl ResponsesSseFramer {
             })
             .unwrap_or(false);
         if has_existing_output {
-            return payload.clone();
+            return response.clone();
         }
 
-        let mut completed = payload.clone();
-        let response = completed.get_mut("response").and_then(Value::as_object_mut);
+        let mut repaired = response.clone();
+        let response = repaired.as_object_mut();
         let Some(response) = response else {
-            return payload.clone();
+            return repaired;
         };
 
         let mut output = Vec::new();
@@ -149,28 +178,17 @@ impl ResponsesSseFramer {
             }
         }
         response.insert("output".to_string(), Value::Array(output));
-        completed
+        repaired
     }
 }
 
 pub(super) fn extract_completed_response_from_sse(bytes: &[u8]) -> anyhow::Result<Bytes> {
     for frame in sse_frames(bytes) {
-        let Some(payload) = sse_data_payload(frame) else {
+        let Some(event) = ResponsesStreamEventIr::from_sse_frame(frame)? else {
             continue;
         };
-        let Ok(value) = serde_json::from_slice::<Value>(&payload) else {
-            continue;
-        };
-        if value
-            .get("type")
-            .and_then(Value::as_str)
-            .map(|value| value == "response.completed")
-            .unwrap_or(false)
-        {
-            let response = value.get("response").ok_or_else(|| {
-                anyhow::anyhow!("response.completed event missing response payload")
-            })?;
-            return serde_json::to_vec(response)
+        if let ResponsesStreamEventIr::Completed(completed) = event {
+            return serde_json::to_vec(&completed.response)
                 .map(Bytes::from)
                 .map_err(anyhow::Error::from);
         }
@@ -348,4 +366,30 @@ fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
         .map(|index| index + 1)
         .unwrap_or(start);
     &bytes[start..end]
+}
+
+fn is_header_only_sse_frame(frame: &[u8]) -> bool {
+    let trimmed = trim_ascii_whitespace(frame);
+    !trimmed.is_empty()
+        && !sse_has_field(trimmed, b"data:")
+        && (sse_has_field(trimmed, b"event:")
+            || sse_has_field(trimmed, b"id:")
+            || sse_has_field(trimmed, b"retry:")
+            || sse_has_field(trimmed, b":"))
+}
+
+fn trim_sse_frame_terminator(frame: &[u8]) -> &[u8] {
+    frame
+        .strip_suffix(b"\r\n\r\n")
+        .or_else(|| frame.strip_suffix(b"\n\n"))
+        .unwrap_or(frame)
+}
+
+fn merge_sse_header_and_frame(header: &[u8], frame: &[u8]) -> Vec<u8> {
+    let mut merged = trim_sse_frame_terminator(header).to_vec();
+    if !merged.ends_with(b"\n") && !frame.starts_with(b"\n") && !frame.starts_with(b"\r") {
+        merged.push(b'\n');
+    }
+    merged.extend_from_slice(frame);
+    merged
 }

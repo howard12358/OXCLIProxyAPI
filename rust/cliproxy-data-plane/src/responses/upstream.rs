@@ -10,15 +10,14 @@ use cliproxy_common_types::{
 };
 use cliproxy_upstream_runtime::{UpstreamExecutionResult, UpstreamRequest, UpstreamRuntime};
 use futures_util::StreamExt;
-use serde_json::{Value, json};
 use tracing::{debug, info, warn};
 
-use crate::telemetry::{RequestTelemetry, StreamCompletionGuard, classify_auth_failure_reason};
+use crate::telemetry::{RequestTelemetry, StreamCompletionGuard};
 
+use super::protocol::ResponsesRequestIr;
 use super::sse::{ResponsesSseFramer, extract_completed_response_from_sse};
 use super::{
-    DEFAULT_CODEX_INSTRUCTIONS, ResponsesRequest, response_from_aggregated_json_body,
-    response_from_body, response_with_stream,
+    ResponsesRequest, response_from_aggregated_json_body, response_from_body, response_with_stream,
 };
 
 pub(super) async fn execute_real_upstream(
@@ -160,19 +159,19 @@ async fn execute_upstream_with_retries(
                 {
                     Ok(response) => return Ok(response),
                     Err(err) if should_retry_auth_bound_error(&err) => {
-                        let reason = classify_auth_failure_reason(&err);
+                        let reason = classify_precommit_retry(&err).reason();
                         telemetry.record_auth_failure(reason);
                         telemetry.record_auth_retry(reason);
                         info!(
                             failed_auth_id = %candidate.id,
                             next_retry_candidates = ?execution_plan.retry_candidates,
-                            reason = %err,
+                            reason = %reason,
                             "responses upstream auth failed, retrying next candidate"
                         );
                         last_error = Some(err);
                     }
                     Err(err) => {
-                        telemetry.record_auth_failure(classify_auth_failure_reason(&err));
+                        telemetry.record_auth_failure(classify_precommit_retry(&err).reason());
                         return Err(err);
                     }
                 }
@@ -206,13 +205,43 @@ fn auth_retry_chain(
     chain
 }
 
-pub(super) fn should_retry_auth_bound_error(err: &anyhow::Error) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PrecommitRetryClassification {
+    Retryable(&'static str),
+    NonRetryable(&'static str),
+}
+
+impl PrecommitRetryClassification {
+    pub(super) fn should_retry(self) -> bool {
+        matches!(self, Self::Retryable(_))
+    }
+
+    pub(super) fn reason(self) -> &'static str {
+        match self {
+            Self::Retryable(reason) | Self::NonRetryable(reason) => reason,
+        }
+    }
+}
+
+pub(super) fn classify_precommit_retry(err: &anyhow::Error) -> PrecommitRetryClassification {
     let message = err.to_string().to_ascii_lowercase();
-    message.contains("upstream codex error 401")
-        || message.contains("upstream codex error 403")
-        || is_codex_quota_exhaustion_error(&message)
-        || message.contains("account_deactivated")
-        || message.contains("invalid_api_key")
+    if message.contains("upstream codex error 401") || message.contains("invalid_api_key") {
+        return PrecommitRetryClassification::Retryable("auth_401");
+    }
+    if message.contains("upstream codex error 403") || message.contains("account_deactivated") {
+        return PrecommitRetryClassification::Retryable("auth_403");
+    }
+    if is_codex_quota_exhaustion_error(&message) {
+        return PrecommitRetryClassification::Retryable("usage_limit_reached");
+    }
+    if message.contains("upstream codex error 429") {
+        return PrecommitRetryClassification::NonRetryable("auth_429");
+    }
+    PrecommitRetryClassification::NonRetryable("other")
+}
+
+pub(super) fn should_retry_auth_bound_error(err: &anyhow::Error) -> bool {
+    classify_precommit_retry(err).should_retry()
 }
 
 fn is_codex_quota_exhaustion_error(message: &str) -> bool {
@@ -222,19 +251,20 @@ fn is_codex_quota_exhaustion_error(message: &str) -> bool {
 }
 
 pub(super) fn log_upstream_failure(err: &anyhow::Error, execution_plan: &ExecutionPlan) {
+    let error = redact_error_chain(err);
     warn!(
         provider = ?execution_plan.provider,
         auth_id = %execution_plan.auth_id,
         resolved_model = %execution_plan.model,
         stickiness_source = ?execution_plan.stickiness_source,
-        error = %err,
+        error = %error,
         "responses upstream execution failed"
     );
 
     let chain = err
         .chain()
         .enumerate()
-        .map(|(index, cause)| format!("{index}: {cause}"))
+        .map(|(index, cause)| format!("{index}: {}", redact_error_text(&cause.to_string())))
         .collect::<Vec<_>>()
         .join(" | ");
 
@@ -247,42 +277,23 @@ pub(super) fn log_upstream_failure(err: &anyhow::Error, execution_plan: &Executi
     );
 }
 
+fn redact_error_chain(err: &anyhow::Error) -> String {
+    redact_error_text(&err.to_string())
+}
+
+fn redact_error_text(text: &str) -> String {
+    cliproxy_upstream_runtime::redact_url(text)
+        .replace("Bearer ", "Bearer <redacted>")
+        .replace("bearer ", "bearer <redacted>")
+}
+
 pub(super) fn normalize_upstream_request(
-    mut request: ResponsesRequest,
+    request: ResponsesRequest,
     execution_plan: &ExecutionPlan,
 ) -> ResponsesRequest {
-    if execution_plan.provider != cliproxy_common_types::upstream::ProviderKind::Codex {
-        return request;
-    }
-
-    request.store = Some(false);
-    request.metadata = None;
-
-    if request
-        .instructions
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_none()
-    {
-        request.instructions = Some(DEFAULT_CODEX_INSTRUCTIONS.to_string());
-    }
-
-    if let Some(Value::String(text)) = request.input.take() {
-        request.input = Some(json!([
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": text
-                    }
-                ]
-            }
-        ]));
-    }
-
-    request
+    let ir = ResponsesRequestIr::from_downstream_request(&request);
+    debug_assert!(!ir.model().trim().is_empty());
+    ir.emit_upstream_request(execution_plan)
 }
 
 async fn aggregate_streaming_response_body(

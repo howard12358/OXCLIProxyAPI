@@ -1,0 +1,13 @@
+{
+  "name": "buffers_split_data_payload_chunks",
+  "chunks": [
+    "data: {\"type\":\"response.created\"",
+    ",\"response\":{\"id\":\"resp-1\"}}"
+  ],
+  "expected_frames": [
+    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\"}}\n\n"
+  ],
+  "expected_event_types": [
+    "response.created"
+  ]
+}

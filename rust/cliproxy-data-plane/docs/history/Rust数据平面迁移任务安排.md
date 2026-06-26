@@ -108,9 +108,9 @@ rust/cliproxy-data-plane/
 | 里程碑 0：基础骨架与契约 | 已完成 | 无明显缺口 | 低 |
 | 里程碑 1：Snapshot Client 与运行时状态 | 已完成 | 指标与运维输出仍偏弱，但不影响该里程碑主目标 | 低 |
 | 里程碑 2：`/v1/responses` 接入垂直切片 | 已完成 | 可继续补更多下游断连清理与样本覆盖 | 中 |
-| 里程碑 3：OpenAI / Codex 上游执行运行时 | 已完成首版可用闭环 | `usage` 提取尚未形成独立输出链路；更完整的日志脱敏、预提交重试分类与运维侧输出仍可继续收口 | 中高 |
+| 里程碑 3：OpenAI / Codex 上游执行运行时 | 已完成收敛加强版 | `usage` 提取已在 telemetry 内形成更清晰的 observation 边界；已补 pre-commit retry classifier 与基础 request/response redact 规则；更完整的 provider-neutral 重试分类和更细粒度日志策略仍可继续收口 | 中高 |
 | 里程碑 4：Router Core v1 | 已完成收敛版本 | scheduler 指标、auth 健康信号对外化仍不完整 | 中 |
-| 里程碑 5：协议转换 IR v1 | 已完成 MVP 最小子集 | 没有独立 `protocol-translate` crate；canonical IR、parser/emitter 仍未正式抽象；翻译逻辑仍部分留在 `responses` 垂直链路里 | 中高 |
+| 里程碑 5：协议转换 IR v1 | 已完成显式 MVP 最小子集 | 没有独立 `protocol-translate` crate；canonical response IR 仍不完整；更多 provider-neutral parser/emitter 仍未抽出 | 中 |
 | 里程碑 6：SSE 修复与行为对齐 | 已完成 MVP 最小子集 | 缺少与 Go 全量 fixtures 的系统性 parity tests；malformed stream 回归覆盖还不算完整 | 高 |
 | 里程碑 7：扩展路由与 Provider | 未开始 | `/v1/chat/completions`、`/v1/messages`、Claude adapter、Gemini adapter、更多 provider/model routing 组合都还没接入 Rust 数据平面 | 低 |
 | 里程碑 8：Usage 事件与运维集成 | 已完成最小 CPA usage 闭环 | `usage-events` 已改为 CPA usage queue payload 形状，但仍只有 log sink；Rust 侧尚未直接暴露完整 redis 订阅 / pop 协议；auth 健康信号沉淀、cooldown 建议、runbook 都还没完整落地 | 最高 |
@@ -254,7 +254,9 @@ rust/cliproxy-data-plane/
 - 已完成 OpenAI / Codex `/responses` HTTP upstream 执行
 - 已支持基于选中 `auth_id` 的 Codex OAuth 上游执行
 - 已支持“无全局 token、仅 auth-bound 执行”路径
-- usage 事件仍停留在响应语义保留阶段，尚未形成独立输出链路
+- 已补 `/v1/responses` pre-commit retry classifier
+- 已补 upstream request/response 基础脱敏规则
+- usage 提取已在 telemetry 内收成更明确的 observation 边界，但仍未独立成单独 crate
 
 ### 里程碑 4：Router Core v1
 
@@ -333,11 +335,13 @@ rust/cliproxy-data-plane/
 
 当前状态补充：
 
-当前并未完整实现独立的 `protocol-translate` crate，但 MVP 所需的最小协议转换已经在 `responses` 垂直链路内落地：
+当前并未完整实现独立的 `protocol-translate` crate，但 MVP 所需的最小协议转换已经在 `responses` 垂直链路内形成显式边界：
 
-- OpenAI Responses 下游请求到 Codex 上游请求的最小适配已可用
-- Codex 流式 SSE 到下游非流式 `response` JSON 的聚合兼容已可用
-- 这意味着里程碑 5 在 MVP 范围内已基本满足，但“独立 IR crate 化”仍是后续整理项
+- 已新增 `responses/protocol.rs`，显式承接 request IR 和 stream event IR
+- OpenAI Responses 下游请求到 Codex 上游请求的最小适配已通过 request IR 发射
+- SSE `response.output_item.done` / `response.completed` 已通过 stream event IR 进入 repair 流程
+- Codex 流式 SSE 到下游非流式 `response` JSON 的聚合兼容仍保持可用
+- 这意味着里程碑 5 在 MVP 范围内已不再只是“隐式适配”，但“独立 IR crate 化”和更完整的 canonical response IR 仍是后续整理项
 
 ### 里程碑 6：SSE 修复与行为对齐
 
@@ -374,6 +378,8 @@ rust/cliproxy-data-plane/
 - `response.completed` 聚合提取
 - 流式上游到非流式下游的兼容回放
 - 关键 `/responses` 场景的回归测试
+- 一组基于 Go 已有 stream-repair 样本迁移而来的 fixture-driven parity tests
+- 已覆盖部分 malformed case，例如 `event:` / `data:` 之间夹杂空行的 SSE 片段
 
 但与 Go 全量 fixtures 的系统性 parity 还没有完整展开，因此这里仍然只算 MVP 所需最小子集完成。
 

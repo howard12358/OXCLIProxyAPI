@@ -1,0 +1,13 @@
+{
+  "name": "tolerates_blank_line_between_event_and_data",
+  "chunks": [
+    "event: response.created\n\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\"}}\n\ndata: [DONE]\n"
+  ],
+  "expected_frames": [
+    "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\"}}\n\n",
+    "data: [DONE]\n\n"
+  ],
+  "expected_event_types": [
+    "response.created"
+  ]
+}

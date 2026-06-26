@@ -57,17 +57,20 @@
 - `rust/cliproxy-data-plane/src/http.rs`
   - Rust HTTP routes for health, readiness, snapshot inspection, notify, and `/v1/responses`
 - `rust/cliproxy-data-plane/src/telemetry.rs`
-  - Request lifecycle telemetry, usage extraction, and CPA-shaped async usage payload emission
+  - Request lifecycle telemetry, extracted usage observation helper, and CPA-shaped async usage payload emission
 - `rust/cliproxy-data-plane/src/responses.rs`
   - Rust `/v1/responses` parent module with shared request/response types, helpers, and unit tests
 - `rust/cliproxy-data-plane/src/responses/`
   - Rust `/v1/responses` child modules split by responsibility:
   - `handler.rs` route handler orchestration and plan/bootstrap flow
+  - `protocol.rs` minimal request / stream-event protocol IR for `/v1/responses`
   - `upstream.rs` real upstream execution, request normalization, and auth retry
   - `sse.rs` SSE framing and completed-output repair
   - `mock.rs` mock fallback responses
 - `rust/cliproxy-data-plane/crates/usage-events/`
   - CPA-shaped usage queue payload type and async producer for non-blocking sinks
+- `rust/cliproxy-data-plane/crates/upstream-runtime/src/lib.rs`
+  - upstream HTTP execution plus shared request/response redaction helpers for logging
 
 ## Main Data Flow
 
@@ -76,7 +79,7 @@
 - Go -> Rust runtime-config path:
   - Go config/auth state -> runtime snapshot -> Rust pull / apply
 - Rust responses path:
-  - request -> runtime snapshot + router core -> upstream runtime -> normalized downstream response -> CPA-shaped usage payload emission
+  - request -> request IR -> runtime snapshot + router core -> upstream runtime -> stream-event IR + normalized downstream response -> CPA-shaped usage payload emission
 
 ## Main Control Flow
 

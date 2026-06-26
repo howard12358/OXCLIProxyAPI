@@ -1,0 +1,8 @@
+{
+  "name": "drops_incomplete_trailing_data_chunk_on_flush",
+  "chunks": [
+    "data: {\"type\":\"response.created\""
+  ],
+  "expected_frames": [],
+  "expected_event_types": []
+}

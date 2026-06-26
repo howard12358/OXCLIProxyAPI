@@ -1,0 +1,18 @@
+{
+  "name": "repairs_mixed_indexed_and_unindexed_done_items",
+  "chunks": [
+    "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"id\":\"fc-1\",\"call_id\":\"call-1\",\"name\":\"shell\",\"arguments\":\"{}\",\"status\":\"completed\"}}",
+    "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg-1\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}}",
+    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"output\":[]}}"
+  ],
+  "expected_frames": [
+    "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"id\":\"fc-1\",\"call_id\":\"call-1\",\"name\":\"shell\",\"arguments\":\"{}\",\"status\":\"completed\"}}\n\n",
+    "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg-1\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}}\n\n",
+    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"output\":[{\"arguments\":\"{}\",\"call_id\":\"call-1\",\"id\":\"fc-1\",\"name\":\"shell\",\"status\":\"completed\",\"type\":\"function_call\"},{\"content\":[{\"text\":\"done\",\"type\":\"output_text\"}],\"id\":\"msg-1\",\"role\":\"assistant\",\"type\":\"message\"}]}}\n\n"
+  ],
+  "expected_event_types": [
+    "response.output_item.done",
+    "response.output_item.done",
+    "response.completed"
+  ]
+}

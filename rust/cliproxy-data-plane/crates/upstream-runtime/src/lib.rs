@@ -18,6 +18,7 @@ use reqwest::{
     Client, Method, Response,
     header::{ACCEPT, AUTHORIZATION, CONNECTION, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT},
 };
+use serde_json::Value;
 use tracing::info;
 use url::Url;
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>;
@@ -309,7 +310,18 @@ impl UpstreamRuntime {
         request: UpstreamRequest,
         proxy_override: Option<&str>,
     ) -> Result<UpstreamExecutionResult> {
-        info!(provider = ?provider, url, stream = request.stream, "dispatching upstream responses request");
+        let redacted_headers = redact_headers(&headers);
+        let redacted_request_body = redact_json_bytes(&request.body)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|_| format!("<non_json:{} bytes>", request.body.len()));
+        info!(
+            provider = ?provider,
+            url = %redact_url(url),
+            stream = request.stream,
+            headers = ?redacted_headers,
+            body = %redacted_request_body,
+            "dispatching upstream responses request"
+        );
 
         let response = self
             .client_for_proxy(proxy_override)?
@@ -326,6 +338,17 @@ impl UpstreamRuntime {
                 .bytes()
                 .await
                 .context("failed to read upstream error body")?;
+            let redacted_error_body = redact_json_bytes(&error_body)
+                .map(|value| value.to_string())
+                .unwrap_or_else(|_| String::from_utf8_lossy(&error_body).into_owned());
+            info!(
+                provider = ?provider,
+                url = %redact_url(url),
+                status = head.status,
+                response_headers = ?redact_response_headers(&head.headers),
+                response_body = %redacted_error_body,
+                "upstream responses request failed before downstream commit"
+            );
             bail!(
                 "upstream {} error {}: {}",
                 provider_name(provider),
@@ -403,6 +426,51 @@ impl UpstreamRuntime {
             .insert(key, client.clone());
         Ok(client)
     }
+}
+
+pub fn redact_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(key, value)| {
+            let name = key.as_str().to_ascii_lowercase();
+            let rendered = if is_sensitive_header(&name) {
+                "<redacted>".to_string()
+            } else {
+                value.to_str().ok()?.to_string()
+            };
+            Some((name, rendered))
+        })
+        .collect()
+}
+
+pub fn redact_response_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .map(|(key, value)| {
+            let name = key.to_ascii_lowercase();
+            let rendered = if is_sensitive_header(&name) {
+                "<redacted>".to_string()
+            } else {
+                value.clone()
+            };
+            (name, rendered)
+        })
+        .collect()
+}
+
+pub fn redact_json_bytes(bytes: &[u8]) -> Result<Value> {
+    let value = serde_json::from_slice::<Value>(bytes).context("parse json body for redaction")?;
+    Ok(redact_json_value(value))
+}
+
+pub fn redact_url(url: &str) -> String {
+    let Ok(mut parsed) = Url::parse(url) else {
+        return url.to_string();
+    };
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    parsed.set_query(None);
+    parsed.to_string()
 }
 
 fn build_client(config: &UpstreamRuntimeConfig, setting: &ProxySetting) -> Result<Client> {
@@ -632,9 +700,59 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
+fn redact_json_value(value: Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| {
+                    let normalized = key.to_ascii_lowercase();
+                    let redacted = if is_sensitive_json_key(&normalized) {
+                        Value::String("<redacted>".to_string())
+                    } else {
+                        redact_json_value(value)
+                    };
+                    (key, redacted)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.into_iter().map(redact_json_value).collect()),
+        other => other,
+    }
+}
+
+fn is_sensitive_header(name: &str) -> bool {
+    matches!(
+        name,
+        "authorization"
+            | "proxy-authorization"
+            | "x-api-key"
+            | "api-key"
+            | "chatgpt-account-id"
+            | "cookie"
+            | "set-cookie"
+    )
+}
+
+fn is_sensitive_json_key(name: &str) -> bool {
+    matches!(
+        name,
+        "input"
+            | "instructions"
+            | "content"
+            | "text"
+            | "api_key"
+            | "access_token"
+            | "authorization"
+            | "token"
+            | "secret"
+            | "password"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     #[test]
     fn provider_for_model_prefers_codex_when_model_contains_codex() {
         let runtime = UpstreamRuntime::new(UpstreamRuntimeConfig {
@@ -661,5 +779,51 @@ mod tests {
             runtime.provider_for_model("gpt-5"),
             Some(ProviderKind::OpenAi)
         );
+    }
+
+    #[test]
+    fn redact_headers_masks_credentials_and_account_identity() {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer secret-token"));
+        headers.insert("x-api-key", HeaderValue::from_static("openai-key"));
+        headers.insert("chatgpt-account-id", HeaderValue::from_static("acct-42"));
+        headers.insert(USER_AGENT, HeaderValue::from_static("cliproxy-test"));
+
+        let redacted = redact_headers(&headers);
+
+        assert_eq!(
+            redacted.get("authorization").map(String::as_str),
+            Some("<redacted>")
+        );
+        assert_eq!(redacted.get("x-api-key").map(String::as_str), Some("<redacted>"));
+        assert_eq!(
+            redacted.get("chatgpt-account-id").map(String::as_str),
+            Some("<redacted>")
+        );
+        assert_eq!(redacted.get("user-agent").map(String::as_str), Some("cliproxy-test"));
+    }
+
+    #[test]
+    fn redact_json_bytes_masks_request_and_response_sensitive_fields() {
+        let payload = serde_json::to_vec(&json!({
+            "model": "gpt-5",
+            "input": "user secret",
+            "instructions": "system prompt",
+            "api_key": "openai-key",
+            "nested": {
+                "access_token": "codex-token",
+                "safe": "ok"
+            }
+        }))
+        .expect("serialize payload");
+
+        let redacted = redact_json_bytes(&payload).expect("redact payload");
+
+        assert_eq!(redacted["model"], "gpt-5");
+        assert_eq!(redacted["input"], "<redacted>");
+        assert_eq!(redacted["instructions"], "<redacted>");
+        assert_eq!(redacted["api_key"], "<redacted>");
+        assert_eq!(redacted["nested"]["access_token"], "<redacted>");
+        assert_eq!(redacted["nested"]["safe"], "ok");
     }
 }
