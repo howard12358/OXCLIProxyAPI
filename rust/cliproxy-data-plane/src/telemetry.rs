@@ -66,6 +66,10 @@ impl AppTelemetry {
     }
 }
 
+/// 请求级 telemetry 的共享内部状态。
+///
+/// 这里承载 `/v1/responses` 生命周期里逐步补齐的 provider、auth、响应头、
+/// usage 和时延数据，供 handler、upstream 和流式收口路径共同写入。
 #[derive(Default)]
 struct RequestTelemetryState {
     provider: Mutex<String>,
@@ -98,6 +102,7 @@ pub struct RequestTelemetry {
 }
 
 impl RequestTelemetry {
+    /// 在 execution plan 选定后，把最终执行语义写入请求观测上下文。
     pub fn bind_execution_plan(&self, plan: &ExecutionPlan, selected_auth: Option<&AuthRecord>) {
         self.set_provider(provider_name(plan.provider));
         self.set_resolved_model(plan.model.clone());
@@ -189,10 +194,14 @@ impl RequestTelemetry {
             return;
         }
 
+        // 这里只在 snapshot 显式开启并指向 redis backend 时产出 usage payload，
+        // 与 CPA 当前 usage queue 开关语义保持一致。
         if !self.usage_queue_enabled {
             return;
         }
 
+        // Rust 侧发射与 CPA usage queue 对齐的消息形状，但仍通过本地异步 producer
+        // 非阻塞发送，避免使用量事件反向影响主请求链路。
         let payload = UsageQueuePayload {
             timestamp: now_rfc3339(),
             latency_ms: self.started_at.elapsed().as_millis() as u64,
@@ -232,6 +241,7 @@ impl RequestTelemetry {
         let _ = self.app.usage_events.try_emit(payload);
     }
 
+    /// 把一次 usage 观察结果写回请求状态，供最终 usage payload 收口使用。
     fn observe_usage_value(&self, usage: Option<&Value>) {
         let Some(tokens) = UsageObservation::tokens_from_usage(usage) else {
             return;
@@ -259,6 +269,7 @@ impl RequestTelemetry {
             .store(tokens.total_tokens, Ordering::SeqCst);
     }
 
+    /// 合并一次 usage 观察，并在可用时顺便补上 response_id。
     fn apply_usage_observation(&self, observation: UsageObservation) {
         if let Some(response_id) = observation.response_id.as_ref() {
             self.set_response_id(response_id.clone());
@@ -374,14 +385,15 @@ impl RequestTelemetry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// 从 JSON response 或 SSE 事件里抽取出来的统一 usage 观察结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct UsageObservation {
     response_id: Option<String>,
     tokens: UsageQueueTokens,
 }
 
 impl UsageObservation {
+    /// 从非流式 response JSON 中提取 usage 与 response_id。
     fn from_response_json(value: &Value) -> Option<Self> {
         Some(Self {
             response_id: value
@@ -399,6 +411,10 @@ impl UsageObservation {
         Self::from_sse_value(&value)
     }
 
+    /// 从单个 SSE 事件值中提取 usage。
+    ///
+    /// 当前只关心 `response.usage` 和 `response.completed`，因为这已经覆盖
+    /// CPA usage 最小闭环需要的使用量来源。
     fn from_sse_value(value: &Value) -> Option<Self> {
         match value
             .get("type")
@@ -414,6 +430,7 @@ impl UsageObservation {
         }
     }
 
+    /// 把 usage 字段折叠成 usage queue 所需的 token 统计结构。
     fn tokens_from_usage(usage: Option<&Value>) -> Option<UsageQueueTokens> {
         let usage = usage?;
         let input_tokens = usage
@@ -455,6 +472,7 @@ impl UsageObservation {
         })
     }
 
+    /// 把内部观察值重建成统一 usage JSON 视图，便于复用现有写回路径。
     fn usage_value(&self) -> Value {
         serde_json::json!({
             "input_tokens": self.tokens.input_tokens,
@@ -482,11 +500,13 @@ impl StreamCompletionGuard {
         }
     }
 
+    /// 显式标记流式请求成功结束，避免 Drop 时被误判为取消。
     pub fn finish_success(&mut self) {
         self.telemetry.finish_success();
         self.completed = true;
     }
 
+    /// 显式标记流式请求失败结束，避免 Drop 时重复收口。
     pub fn finish_error(&mut self) {
         self.telemetry.finish_error(502, "upstream stream error");
         self.completed = true;
@@ -509,6 +529,7 @@ pub fn provider_name(provider: ProviderKind) -> &'static str {
     }
 }
 
+/// 把上游错误折叠成 usage / 运维侧可消费的粗粒度失败原因。
 pub fn classify_auth_failure_reason(err: &anyhow::Error) -> &'static str {
     let message = err.to_string().to_ascii_lowercase();
     if message.contains("upstream codex error 401") || message.contains("invalid_api_key") {

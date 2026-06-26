@@ -13,6 +13,7 @@ use cliproxy_common_types::{
 use serde_json::Value;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+/// router-core 接收的最小选路输入。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanRequest {
     pub requested_model: String,
@@ -20,11 +21,15 @@ pub struct PlanRequest {
     pub pinned_auth_id: Option<String>,
 }
 
+/// Rust 数据平面的最小选路核心。
+///
+/// 当前只服务 `/v1/responses`，并围绕 execution plan 生成、会话粘性和简单调度展开。
 #[derive(Clone, Default)]
 pub struct RouterCore {
     state: Arc<Mutex<RouterState>>,
 }
 
+/// router-core 的内存态状态。
 #[derive(Default)]
 struct RouterState {
     affinity: HashMap<String, AffinityEntry>,
@@ -32,6 +37,7 @@ struct RouterState {
     had_expired_or_invalid_affinity: bool,
 }
 
+/// 单条会话粘性绑定记录。
 struct AffinityEntry {
     auth_id: String,
     expires_at: Instant,
@@ -42,6 +48,7 @@ impl RouterCore {
         Self::default()
     }
 
+    /// 基于 runtime snapshot 和请求元信息生成 execution plan。
     pub fn plan(&self, snapshot: &RuntimeSnapshot, request: PlanRequest) -> Result<ExecutionPlan> {
         if !snapshot.routes.responses {
             bail!("responses route is disabled by runtime snapshot");
@@ -144,6 +151,7 @@ impl RouterCore {
 }
 
 impl RouterState {
+    /// 读取会话粘性绑定；如果已过期，则顺手清理并标记需要 rebound。
     fn get_affinity(&mut self, key: &str) -> Option<String> {
         let now = Instant::now();
         match self.affinity.get(key) {
@@ -178,6 +186,7 @@ impl RouterState {
     }
 }
 
+/// 构造统一 execution plan 输出。
 fn build_plan(
     provider: ProviderKind,
     model: &str,
@@ -210,6 +219,7 @@ fn provider_enabled(snapshot: &RuntimeSnapshot, provider_key: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// 先按 provider alias 解析模型；解析不到时要求模型本身已在 provider 白名单内。
 fn resolve_model(
     snapshot: &RuntimeSnapshot,
     provider_key: &str,
@@ -240,6 +250,7 @@ fn resolve_model(
     bail!("requested model {requested_model} is not routable for provider {provider_key}")
 }
 
+/// 过滤出当前 provider + model 下真正可执行的 auth 候选，并按优先级排序。
 fn available_auths<'a>(
     snapshot: &'a RuntimeSnapshot,
     provider_key: &str,
@@ -275,6 +286,7 @@ fn cooldown_active(cooldown_until: Option<&str>, now: OffsetDateTime) -> bool {
         .unwrap_or(false)
 }
 
+/// 在最高优先级候选集合里按配置策略挑选一个 auth。
 fn select_by_strategy<'a>(
     state: &mut RouterState,
     snapshot: &RuntimeSnapshot,
@@ -296,6 +308,7 @@ fn select_by_strategy<'a>(
     }
 }
 
+/// 基于当前可用 auth 集合生成重试链，优先同优先级候选，再退到其他可用 auth。
 fn retries_for_available(
     available: &[&AuthRecord],
     chosen_auth_id: &str,
@@ -327,6 +340,7 @@ fn trim_to_owned(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+/// 从 metadata 提取 Codex 会话 ID，并统一加上命名空间前缀。
 pub fn extract_codex_session_id(metadata: Option<&Value>) -> Option<String> {
     let metadata = metadata?;
     if let Some(value) = metadata.get("user_id").and_then(Value::as_str) {
@@ -346,6 +360,7 @@ pub fn extract_codex_session_id(metadata: Option<&Value>) -> Option<String> {
         .map(|session_id| format!("codex:{session_id}"))
 }
 
+/// 从 metadata 提取显式 pinned auth。
 pub fn extract_pinned_auth_id(metadata: Option<&Value>) -> Option<String> {
     metadata
         .and_then(|metadata| metadata.get("pinned_auth_id"))

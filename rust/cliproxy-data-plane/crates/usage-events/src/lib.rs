@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::info;
 
+/// 对齐 CPA usage queue 语义的消息体。
+///
+/// Rust 当前先保证 payload 形状一致；底层仍由本地异步 producer 发射，
+/// 还没有在 Rust 进程内完整复刻 CPA 的 redis 协议面。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct UsageQueuePayload {
     pub timestamp: String,
@@ -28,6 +32,7 @@ pub struct UsageQueuePayload {
     pub service_tier: String,
 }
 
+/// usage payload 中的 token 统计集合。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct UsageQueueTokens {
     pub input_tokens: u64,
@@ -39,18 +44,23 @@ pub struct UsageQueueTokens {
     pub total_tokens: u64,
 }
 
+/// usage payload 中的失败摘要。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct UsageQueueFail {
     pub status_code: u16,
     pub body: String,
 }
 
+/// 异步 usage 事件生产器。
+///
+/// 主请求链路只做非阻塞 try-send，保证使用量事件失败不会拖慢数据面响应。
 #[derive(Clone)]
 pub struct UsageEventProducer {
     tx: mpsc::Sender<UsageQueuePayload>,
 }
 
 impl UsageEventProducer {
+    /// 最小生产闭环：写入内存队列，再由后台任务以结构化日志吐出。
     pub fn new_log(buffer: usize) -> Self {
         let (tx, mut rx) = mpsc::channel(buffer.max(1));
         tokio::spawn(async move {
@@ -63,18 +73,21 @@ impl UsageEventProducer {
         Self { tx }
     }
 
+    /// 空消费模式，保留调用路径但直接丢弃 usage 事件。
     pub fn new_noop(buffer: usize) -> Self {
         let (tx, mut rx) = mpsc::channel(buffer.max(1));
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
         Self { tx }
     }
 
+    /// 非阻塞尝试投递 usage 事件。
     pub fn try_emit(&self, event: UsageQueuePayload) -> bool {
         self.tx.try_send(event).is_ok()
     }
 }
 
 impl UsageEventProducer {
+    /// 测试辅助入口：直接暴露接收端，便于断言 payload 内容。
     pub fn new_channel(buffer: usize) -> (Self, mpsc::Receiver<UsageQueuePayload>) {
         let (tx, rx) = mpsc::channel(buffer.max(1));
         (Self { tx }, rx)

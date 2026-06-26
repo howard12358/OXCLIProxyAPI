@@ -8,6 +8,10 @@ use crate::config::Config;
 use crate::http;
 use crate::runtime::RuntimeStateHandle;
 
+/// Rust 数据平面进程的主启动流程。
+///
+/// 这里负责把进程级配置串成完整运行时：snapshot client、upstream runtime、
+/// runtime state、后台刷新任务，以及最终的 HTTP 服务监听。
 pub async fn run(config: Config) -> Result<()> {
     let runtime_state = RuntimeStateHandle::new(&config);
     let snapshot_client = RuntimeConfigClient::new(config.snapshot_client_config()?);

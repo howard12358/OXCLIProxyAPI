@@ -6,6 +6,7 @@ use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, HeaderValue};
 use serde::{Deserialize, Serialize};
 
+/// runtime snapshot 的来源。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SnapshotSource {
     File { path: PathBuf },
@@ -15,6 +16,7 @@ pub enum SnapshotSource {
     },
 }
 
+/// runtime config client 的进程级配置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeConfigClientConfig {
     pub source: SnapshotSource,
@@ -34,12 +36,14 @@ impl RuntimeConfigClientConfig {
     }
 }
 
+/// 一次 snapshot 拉取后的更新结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotUpdate {
     pub snapshot: RuntimeSnapshot,
     pub changed: bool,
 }
 
+/// Rust 拉取 Go runtime snapshot 的客户端。
 #[derive(Debug, Clone)]
 pub struct RuntimeConfigClient {
     config: RuntimeConfigClientConfig,
@@ -61,6 +65,7 @@ impl RuntimeConfigClient {
         &self.config
     }
 
+    /// 按配置源拉取并校验一份完整 snapshot。
     pub async fn fetch_snapshot(&self) -> Result<RuntimeSnapshot> {
         let raw = match &self.config.source {
             SnapshotSource::File { path } => tokio::fs::read_to_string(path)
@@ -93,6 +98,7 @@ impl RuntimeConfigClient {
         Ok(snapshot)
     }
 
+    /// 拉取 snapshot 并判断版本是否发生变化。
     pub async fn fetch_update(&self, current_version: Option<&str>) -> Result<SnapshotUpdate> {
         let snapshot = self.fetch_snapshot().await?;
         let changed = snapshot_changed(current_version, &snapshot.version);
@@ -100,6 +106,7 @@ impl RuntimeConfigClient {
     }
 }
 
+/// 判断 snapshot 版本是否变化。
 pub fn snapshot_changed(current_version: Option<&str>, next_version: &str) -> bool {
     match current_version {
         Some(current) => current.trim() != next_version.trim(),
@@ -107,6 +114,9 @@ pub fn snapshot_changed(current_version: Option<&str>, next_version: &str) -> bo
     }
 }
 
+/// 对 Go 导出的 snapshot 做最小结构校验。
+///
+/// 这里不是完整业务校验，而是防止 Rust 侧在明显缺字段的配置上继续运行。
 pub fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<()> {
     if snapshot.version.trim().is_empty() {
         bail!("snapshot.version must not be empty");

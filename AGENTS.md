@@ -100,7 +100,8 @@ If such a change is necessary:
 
 ## Stable Repository Rules
 
-- If editing code that already contains non-English comments, translate them to English rather than adding more non-English comments.
+- Rust 数据平面代码中的关键逻辑、关键结构体和关键流程分支应补充中文注释，优先解释职责边界、行为意图和不直观约束。
+- Rust 数据平面之外的代码，如果编辑到已有非英文注释，优先统一为英文，而不是继续扩散多语言注释。
 - For user-visible strings, preserve the language already used in that area.
 - New Markdown docs should be English unless the file is explicitly language-specific.
 - Do not use `log.Fatal` / `log.Fatalf`; return errors and log with context instead.

@@ -1,6 +1,7 @@
 pub mod health {
     use serde::{Deserialize, Serialize};
 
+    /// 数据平面健康状态枚举，供 `/healthz`、`/readyz` 和 runtime 元数据复用。
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
     #[serde(rename_all = "snake_case")]
     pub enum ServiceState {
@@ -17,6 +18,7 @@ pub mod routing {
 
     use crate::upstream::ProviderKind;
 
+    /// 记录一次选路结果来自哪种粘性/策略语义。
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum StickinessSource {
@@ -26,6 +28,7 @@ pub mod routing {
         PinnedAuth,
     }
 
+    /// 请求进入真实执行前的路由决策结果。
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct ExecutionPlan {
         pub provider: ProviderKind,
@@ -41,6 +44,7 @@ pub mod snapshot {
     use serde::{Deserialize, Serialize};
     use std::collections::BTreeMap;
 
+    /// Go 导出给 Rust 数据平面的 runtime snapshot 总契约。
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
     pub struct RuntimeSnapshot {
         pub version: String,
@@ -68,12 +72,14 @@ pub mod snapshot {
         pub feature_flags: BTreeMap<String, bool>,
     }
 
+    /// 监听器配置，描述 Go 管理面公开出来的地址信息。
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
     pub struct ListenerConfig {
         #[serde(default)]
         pub public_http: String,
     }
 
+    /// 路由开关配置，决定哪些入口可由 Rust 数据平面承接。
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
     pub struct RouteConfig {
         #[serde(default)]
@@ -84,6 +90,7 @@ pub mod snapshot {
         pub messages: bool,
     }
 
+    /// 路由策略配置，包括调度策略和会话粘性 TTL。
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct RoutingConfig {
         pub strategy: RoutingStrategy,
@@ -111,12 +118,14 @@ pub mod snapshot {
         RoundRobin,
     }
 
+    /// provider 级启停配置。
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
     pub struct ProviderConfig {
         #[serde(default)]
         pub enabled: bool,
     }
 
+    /// 单个 auth 的运行时快照记录。
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
     pub struct AuthRecord {
         pub id: String,
@@ -136,11 +145,13 @@ pub mod snapshot {
         pub cooldown_until: Option<String>,
     }
 
+    /// provider-specific 执行信息容器。
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
     pub struct AuthExecution {
         pub codex: Option<CodexExecution>,
     }
 
+    /// Codex OAuth / 执行侧所需的最小运行时字段。
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
     pub struct CodexExecution {
         pub access_token: String,
@@ -154,6 +165,7 @@ pub mod snapshot {
         pub openai_beta: String,
     }
 
+    /// CPA usage queue 的最小启用配置。
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
     pub struct UsageQueueConfig {
         #[serde(default)]
@@ -162,6 +174,7 @@ pub mod snapshot {
         pub backend: String,
     }
 
+    /// 网络层附加配置，目前主要承载统一上游代理。
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
     pub struct NetworkConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -181,6 +194,7 @@ pub mod upstream {
     use serde::{Deserialize, Serialize};
     use std::collections::BTreeMap;
 
+    /// Rust 数据平面内部识别的上游 provider 类型。
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum ProviderKind {
@@ -189,6 +203,7 @@ pub mod upstream {
         Mock,
     }
 
+    /// 上游 HTTP 响应头的统一抽象。
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
     pub struct UpstreamResponseHead {
         pub status: u16,
@@ -196,6 +211,7 @@ pub mod upstream {
         pub headers: BTreeMap<String, String>,
     }
 
+    /// 上游执行链路内部使用的通用流事件抽象。
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(tag = "type", rename_all = "snake_case")]
     pub enum StreamEvent {

@@ -24,12 +24,14 @@ use url::Url;
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>;
 const CODEX_ORIGINATOR: &str = "codex-tui";
 
+/// OpenAI upstream 的进程级静态配置。
 #[derive(Debug, Clone)]
 pub struct OpenAiConfig {
     pub base_url: String,
     pub api_key: String,
 }
 
+/// Codex upstream 的进程级静态配置。
 #[derive(Debug, Clone)]
 pub struct CodexConfig {
     pub base_url: String,
@@ -38,6 +40,7 @@ pub struct CodexConfig {
     pub openai_beta: Option<String>,
 }
 
+/// 上游执行运行时的总配置。
 #[derive(Debug, Clone, Default)]
 pub struct UpstreamRuntimeConfig {
     pub upstream_proxy: Option<String>,
@@ -47,6 +50,9 @@ pub struct UpstreamRuntimeConfig {
     pub codex: Option<CodexConfig>,
 }
 
+/// 真实上游执行运行时。
+///
+/// 它负责 provider 识别、HTTP client 复用、代理选择、请求发送和响应抽象。
 #[derive(Clone)]
 pub struct UpstreamRuntime {
     config: Arc<UpstreamRuntimeConfig>,
@@ -54,6 +60,7 @@ pub struct UpstreamRuntime {
     proxy_clients: Arc<RwLock<HashMap<String, Client>>>,
 }
 
+/// 单个请求最终采用的代理策略。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProxySetting {
     Inherit,
@@ -87,6 +94,7 @@ impl ProxySetting {
     }
 }
 
+/// 发往上游 `/responses` 的统一请求抽象。
 #[derive(Debug, Clone)]
 pub struct UpstreamRequest {
     pub model: String,
@@ -94,6 +102,7 @@ pub struct UpstreamRequest {
     pub stream: bool,
 }
 
+/// 非流式上游响应抽象。
 #[derive(Debug)]
 pub struct UpstreamResponse {
     pub provider: ProviderKind,
@@ -102,6 +111,7 @@ pub struct UpstreamResponse {
     pub head: UpstreamResponseHead,
 }
 
+/// 流式上游响应抽象，首个 chunk 与后续 stream 分开保存。
 pub struct UpstreamStreamResponse {
     pub provider: ProviderKind,
     pub first_chunk: Bytes,
@@ -126,6 +136,7 @@ impl UpstreamRuntime {
         self.config.openai.is_some() || self.config.codex.is_some()
     }
 
+    /// 基于 model 名称和当前配置选择 provider。
     pub fn provider_for_model(&self, model: &str) -> Option<ProviderKind> {
         let model = model.trim().to_ascii_lowercase();
         if model.contains("codex") && self.config.codex.is_some() {
@@ -140,6 +151,7 @@ impl UpstreamRuntime {
         None
     }
 
+    /// 判断某个 auth 是否具备独立执行上游请求的最小条件。
     pub fn can_execute_for_auth(&self, auth: &AuthRecord) -> bool {
         match auth.provider.trim().to_ascii_lowercase().as_str() {
             "codex" => auth
@@ -156,6 +168,7 @@ impl UpstreamRuntime {
         }
     }
 
+    /// 走默认 provider 选择逻辑执行 `/responses`。
     pub async fn execute_responses(
         &self,
         request: UpstreamRequest,
@@ -175,6 +188,7 @@ impl UpstreamRuntime {
         }
     }
 
+    /// 绑定指定 auth 执行 `/responses`，主要用于 auth 级重试链。
     pub async fn execute_responses_for_auth(
         &self,
         auth: &AuthRecord,
@@ -194,6 +208,7 @@ impl UpstreamRuntime {
         }
     }
 
+    /// 发送 OpenAI `/responses` 请求。
     async fn execute_openai(
         &self,
         request: UpstreamRequest,
@@ -217,6 +232,7 @@ impl UpstreamRuntime {
             .await
     }
 
+    /// 发送基于全局静态配置的 Codex `/responses` 请求。
     async fn execute_codex(
         &self,
         request: UpstreamRequest,
@@ -251,6 +267,7 @@ impl UpstreamRuntime {
             .await
     }
 
+    /// 发送绑定指定 auth 的 Codex `/responses` 请求。
     async fn execute_codex_with_auth(
         &self,
         auth: &AuthRecord,
@@ -302,6 +319,7 @@ impl UpstreamRuntime {
             .await
     }
 
+    /// 实际执行一次 HTTP 请求，并把返回抽象成流式或非流式结果。
     async fn execute_http(
         &self,
         provider: ProviderKind,
@@ -358,6 +376,7 @@ impl UpstreamRuntime {
         }
 
         if request.stream {
+            // 首个 chunk 单独拿出来，给上层做 bootstrap / first-byte / 预提交控制。
             let mut stream = response.bytes_stream();
             let first_chunk = stream
                 .next()
@@ -402,6 +421,7 @@ impl UpstreamRuntime {
         }
     }
 
+    /// 根据最终代理策略复用或创建对应的 reqwest client。
     fn client_for_proxy(&self, proxy_override: Option<&str>) -> Result<Client> {
         let setting = preferred_proxy_setting(&self.config, proxy_override)?;
         let key = setting.cache_key();
@@ -428,6 +448,7 @@ impl UpstreamRuntime {
     }
 }
 
+/// 对请求头做脱敏，避免把凭证和账号标识写进日志。
 pub fn redact_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
     headers
         .iter()
@@ -443,6 +464,7 @@ pub fn redact_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// 对响应头做脱敏，规则与请求头保持一致。
 pub fn redact_response_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     headers
         .iter()
@@ -458,11 +480,13 @@ pub fn redact_response_headers(headers: &BTreeMap<String, String>) -> BTreeMap<S
         .collect()
 }
 
+/// 对 JSON body 做递归脱敏。
 pub fn redact_json_bytes(bytes: &[u8]) -> Result<Value> {
     let value = serde_json::from_slice::<Value>(bytes).context("parse json body for redaction")?;
     Ok(redact_json_value(value))
 }
 
+/// 对 URL 做脱敏，移除账号、密码和 query。
 pub fn redact_url(url: &str) -> String {
     let Ok(mut parsed) = Url::parse(url) else {
         return url.to_string();
@@ -473,6 +497,7 @@ pub fn redact_url(url: &str) -> String {
     parsed.to_string()
 }
 
+/// 按代理策略构建 reqwest client。
 fn build_client(config: &UpstreamRuntimeConfig, setting: &ProxySetting) -> Result<Client> {
     let mut builder = Client::builder();
 
@@ -513,6 +538,7 @@ fn build_client(config: &UpstreamRuntimeConfig, setting: &ProxySetting) -> Resul
     builder.build().context("failed to build upstream reqwest client")
 }
 
+/// 解析单次请求最终应采用的代理策略。
 fn preferred_proxy_setting(
     config: &UpstreamRuntimeConfig,
     proxy_override: Option<&str>,
@@ -549,6 +575,7 @@ fn inherited_proxy_setting() -> ProxySetting {
     ProxySetting::Inherit
 }
 
+/// 把环境变量中的代理配置灌进 reqwest builder。
 fn apply_inherited_proxy(builder: reqwest::ClientBuilder) -> Result<reqwest::ClientBuilder> {
     let mut builder = builder;
     if let Some(proxy) = first_env_value(&["ALL_PROXY", "all_proxy"]) {
@@ -605,6 +632,7 @@ pub enum UpstreamExecutionResult {
     Streaming(UpstreamStreamResponse),
 }
 
+/// 从 reqwest 响应中抽取统一 head 结构。
 fn response_head(response: &Response) -> UpstreamResponseHead {
     let headers = response
         .headers()
@@ -654,6 +682,7 @@ fn codex_openai_beta(execution: &CodexExecution, fallback: Option<&CodexConfig>)
         .or_else(|| fallback.and_then(|config| config.openai_beta.clone()))
 }
 
+/// 设置与是否流式相关的通用传输头。
 fn apply_transport_headers(headers: &mut HeaderMap, stream: bool) {
     headers.insert(
         ACCEPT,
@@ -666,6 +695,7 @@ fn apply_transport_headers(headers: &mut HeaderMap, stream: bool) {
     headers.insert(CONNECTION, HeaderValue::from_static("Keep-Alive"));
 }
 
+/// 注入 Codex 路径特有的兼容头。
 fn apply_codex_headers(
     headers: &mut HeaderMap,
     user_agent: &str,

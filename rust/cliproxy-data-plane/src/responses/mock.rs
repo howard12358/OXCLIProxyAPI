@@ -21,6 +21,9 @@ use super::{
     mock_response_id,
 };
 
+/// 本地 mock 的非流式 `/v1/responses` 回包。
+///
+/// 当真实 upstream 不可用时，这条路径提供最小可运行闭环，并继续喂 telemetry。
 pub(super) fn non_streaming_response(
     _request: ResponsesRequest,
     request_meta: RequestMetadata,
@@ -61,6 +64,7 @@ pub(super) fn non_streaming_response(
     }))
 }
 
+/// 本地 mock 的流式 `/v1/responses` 回包。
 pub(super) async fn streaming_response(
     request: ResponsesRequest,
     request_meta: RequestMetadata,
@@ -116,6 +120,7 @@ pub(super) async fn streaming_response(
     Ok(response)
 }
 
+/// 把 mock SSE frame 顺序写回给下游，并通过 completion guard 统一收口 telemetry。
 fn frame_stream(
     first_frame: Bytes,
     rest: Vec<Bytes>,
@@ -135,6 +140,7 @@ fn frame_stream(
     }
 }
 
+/// 生成 mock upstream 的最小事件序列，覆盖 created / delta / usage / completed。
 fn mock_upstream_events(
     request: &ResponsesRequest,
     request_meta: &RequestMetadata,
@@ -206,6 +212,7 @@ fn mock_upstream_events(
     ])
 }
 
+/// 把 mock 事件编码成标准 SSE frame。
 pub(super) fn normalize_sse_frame(event: &MockSseEvent) -> Bytes {
     let payload = serde_json::to_string(&event.payload).unwrap_or_else(|_| "{}".to_string());
     let mut frame = String::new();

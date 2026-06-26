@@ -54,6 +54,7 @@
 
 ## Documentation
 
+- 在 Rust 数据平面代码中，关键逻辑、关键结构体、关键状态流转和不直观分支应补充中文注释，重点说明职责边界、行为原因和兼容性约束。
 - New Markdown docs should be English unless the file is explicitly language-specific.
 - If information is uncertain, mark it `待确认`.
 - Do not treat chat history as a stable source; move durable facts into repo docs.
