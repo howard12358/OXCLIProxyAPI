@@ -3,10 +3,15 @@ use serde_json::Value;
 
 use super::protocol::ResponsesStreamEventIr;
 
+/// 增量式 SSE 分帧器，以及当前 `/v1/responses` 路径对齐 CPA 所需的最小修复逻辑。
 #[derive(Debug, Default)]
 pub(super) struct ResponsesSseFramer {
     pending: Vec<u8>,
+    // 有些上游会把 `event:` 和 `data:` 拆到不同 chunk 里，这里先暂存头部，
+    // 等后续 data frame 到达后再合并。
     pending_header: Option<Vec<u8>>,
+    // 记录已经完成的 output item，这样当终态 `response.completed`
+    // 没有带完整 `response.output` 时，可以按前序事件补齐。
     output_items: std::collections::BTreeMap<usize, Vec<u8>>,
     unindexed_output_items: Vec<Vec<u8>>,
 }
@@ -98,6 +103,8 @@ impl ResponsesSseFramer {
                 self.record_output_item(&done.item, done.output_index);
             }
             ResponsesStreamEventIr::Completed(completed) => {
+                // Go 侧已经会基于前面见过的 output-item 事件修复终态 completed，
+                // 这里镜像同样的行为。
                 let repaired = self.repair_completed_response(&completed.response);
                 if repaired != completed.response {
                     let mut payload = completed.payload;
@@ -182,6 +189,7 @@ impl ResponsesSseFramer {
     }
 }
 
+/// 在完成分帧和修复后，从整段 SSE transcript 中提取终态 response JSON。
 pub(super) fn extract_completed_response_from_sse(bytes: &[u8]) -> anyhow::Result<Bytes> {
     for frame in sse_frames(bytes) {
         let Some(event) = ResponsesStreamEventIr::from_sse_frame(frame)? else {

@@ -15,6 +15,10 @@ use super::mock::{non_streaming_response, streaming_response};
 use super::upstream::{execute_real_upstream, log_upstream_failure};
 use super::{ResponsesRequest, error_response, extract_metadata};
 
+/// Rust 数据平面的 `/v1/responses` 主入口。
+///
+/// 这里负责校验路由是否可用、基于当前 runtime snapshot 构建执行计划，
+/// 然后在真实上游和本地 mock fallback 之间做分流。
 pub async fn handle_responses(
     runtime: RuntimeStateHandle,
     router_core: RouterCore,
@@ -64,6 +68,8 @@ pub async fn handle_responses(
     let selected_auth = auth_for_plan(snapshot.as_ref(), &execution_plan);
     request_telemetry.bind_execution_plan(&execution_plan, selected_auth);
 
+    // 只要全局 runtime 或当前选中的 auth 能执行真实上游，就优先走真实链路；
+    // 否则回退到本地 mock 路径。
     if upstream_enabled_for_request(&upstream, selected_auth) {
         return match execute_real_upstream(
             upstream,

@@ -18,6 +18,7 @@ pub use handler::handle_responses;
 
 const DEFAULT_CODEX_INSTRUCTIONS: &str = "You are Codex. Fulfill the user's request.";
 
+/// `/v1/responses` 入口当前接受的下游请求结构。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ResponsesRequest {
     pub model: String,
@@ -46,6 +47,7 @@ struct ErrorResponse {
     error: ErrorDetail,
 }
 
+/// mock 非流式回包使用的最小 completed response 结构。
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct MockCompletedResponse {
     id: String,
@@ -56,6 +58,7 @@ pub(super) struct MockCompletedResponse {
     usage: Value,
 }
 
+/// 从下游请求中抽取出来的轻量元信息，用于日志、mock 输出和粗粒度 token 估算。
 #[derive(Debug, Clone)]
 pub(super) struct RequestMetadata {
     model: String,
@@ -63,6 +66,7 @@ pub(super) struct RequestMetadata {
     metadata_keys: usize,
 }
 
+/// mock 流式返回时使用的单个 SSE 事件描述。
 #[derive(Debug, Clone)]
 pub(super) struct MockSseEvent {
     event: String,

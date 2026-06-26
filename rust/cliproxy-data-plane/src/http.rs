@@ -17,6 +17,10 @@ use crate::responses::{ResponsesRequest, handle_responses};
 use crate::runtime::{RuntimeInfo, RuntimeStateHandle};
 use crate::telemetry::AppTelemetry;
 
+/// Axum 路由共享状态。
+///
+/// 这里集中放置 HTTP 层需要访问的长生命周期组件，避免每个 handler
+/// 自己重新拼装 runtime、router-core 或 telemetry。
 #[derive(Clone)]
 struct AppState {
     runtime: RuntimeStateHandle,
@@ -26,6 +30,7 @@ struct AppState {
     telemetry: AppTelemetry,
 }
 
+/// `/healthz` 的轻量健康响应，只反映进程当前服务状态。
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     status: ServiceState,
@@ -33,6 +38,7 @@ struct HealthResponse {
     version: &'static str,
 }
 
+/// `/readyz` 的就绪响应，会额外带上 runtime 元信息，方便排查 snapshot 状态。
 #[derive(Debug, Serialize)]
 struct ReadyResponse {
     ready: bool,
@@ -44,6 +50,7 @@ pub fn router(runtime: RuntimeStateHandle, upstream: UpstreamRuntime) -> Router 
     router_with_snapshot_client(runtime, upstream, None)
 }
 
+/// Go 管理面推送 snapshot 变更通知时使用的最小请求体。
 #[derive(Debug, Deserialize)]
 struct SnapshotNotifyRequest {
     version: String,
@@ -51,6 +58,7 @@ struct SnapshotNotifyRequest {
     reason: String,
 }
 
+/// snapshot notify 被接受后的确认响应。
 #[derive(Debug, Serialize)]
 struct SnapshotNotifyResponse {
     accepted: bool,
@@ -61,6 +69,8 @@ pub fn router_with_snapshot_client(
     upstream: UpstreamRuntime,
     snapshot_client: Option<RuntimeConfigClient>,
 ) -> Router {
+    // HTTP 层只负责暴露固定管理/数据面入口，真正的路由选择在
+    // `/v1/responses` 内部再交给 router-core。
     let state = AppState {
         runtime,
         snapshot_client,
@@ -96,6 +106,7 @@ async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
     })
 }
 
+/// 返回当前已经应用到 Rust 进程内存中的 runtime snapshot。
 async fn get_runtime_snapshot(State(state): State<AppState>) -> impl IntoResponse {
     match state.runtime.current_snapshot() {
         Some(snapshot) => {
@@ -115,6 +126,10 @@ async fn get_runtime_snapshot(State(state): State<AppState>) -> impl IntoRespons
     }
 }
 
+/// `/v1/responses` HTTP 入口。
+///
+/// 这里只做 JSON 反序列化和请求级 header 提取，主链路编排交给
+/// `handle_responses()`。
 async fn post_responses(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -152,6 +167,7 @@ async fn post_responses(
     }
 }
 
+/// 接收 Go 管理面的 snapshot 变更通知，并异步触发一次主动刷新。
 async fn post_snapshot_notify(
     State(state): State<AppState>,
     payload: Result<Json<SnapshotNotifyRequest>, JsonRejection>,
@@ -208,6 +224,7 @@ async fn post_snapshot_notify(
         reason = %request.reason,
         "snapshot notify accepted"
     );
+    // notify 只负责触发拉取，不直接携带完整 snapshot，避免配置事实源分叉。
     tokio::spawn(async move {
         runtime.refresh_once(&snapshot_client).await;
     });

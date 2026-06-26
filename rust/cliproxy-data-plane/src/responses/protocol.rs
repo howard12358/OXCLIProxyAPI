@@ -5,6 +5,9 @@ use serde_json::{Value, json};
 
 use super::{DEFAULT_CODEX_INSTRUCTIONS, ResponsesRequest, sse::sse_data_payload};
 
+/// 当前 `/v1/responses` 链路使用的最小规范化请求形态。
+///
+/// 这一层把下游请求解析与 provider 侧发射规则隔离开。
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ResponsesRequestIr {
     model: String,
@@ -16,6 +19,7 @@ pub(super) struct ResponsesRequestIr {
 }
 
 impl ResponsesRequestIr {
+    /// 在进入 provider 定制改写前，先捕获下游请求的原始语义。
     pub(super) fn from_downstream_request(request: &ResponsesRequest) -> Self {
         Self {
             model: request.model.clone(),
@@ -27,6 +31,9 @@ impl ResponsesRequestIr {
         }
     }
 
+    /// 按选中的 provider 发射上游请求形态。
+    ///
+    /// 当前只有 Codex 需要显式改写，其他 provider 先保持下游请求形态不变。
     pub(super) fn emit_upstream_request(&self, execution_plan: &ExecutionPlan) -> ResponsesRequest {
         let mut request = ResponsesRequest {
             model: execution_plan.model.clone(),
@@ -76,6 +83,7 @@ impl ResponsesRequestIr {
     }
 }
 
+/// SSE 修复路径使用的最小类型化流事件边界。
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum ResponsesStreamEventIr {
     OutputItemDone(OutputItemDoneIr),
@@ -85,6 +93,7 @@ pub(super) enum ResponsesStreamEventIr {
     NonJson(NonJsonEventIr),
 }
 
+/// `response.output_item.done` 事件在 IR 层的最小承载结构。
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct OutputItemDoneIr {
     pub(super) payload: Value,
@@ -92,24 +101,28 @@ pub(super) struct OutputItemDoneIr {
     pub(super) item: Value,
 }
 
+/// `response.completed` 事件在 IR 层的最小承载结构。
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct CompletedResponseIr {
     pub(super) payload: Value,
     pub(super) response: Value,
 }
 
+/// 暂未特殊处理、但已成功解析成 JSON 的其他 SSE 事件。
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct OtherJsonEventIr {
     pub(super) event_type: String,
     pub(super) payload: Value,
 }
 
+/// `data:` 存在但不是合法 JSON 的 SSE 事件。
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct NonJsonEventIr {
     pub(super) payload: Vec<u8>,
 }
 
 impl ResponsesStreamEventIr {
+    /// 把标准化后的 SSE frame 解析成当前修复与聚合逻辑所需的最小事件集合。
     pub(super) fn from_sse_frame(frame: &[u8]) -> anyhow::Result<Option<Self>> {
         let Some(payload) = sse_data_payload(frame) else {
             return Ok(None);

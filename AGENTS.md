@@ -100,7 +100,6 @@ If such a change is necessary:
 
 ## Stable Repository Rules
 
-- Comments in code must be English only.
 - If editing code that already contains non-English comments, translate them to English rather than adding more non-English comments.
 - For user-visible strings, preserve the language already used in that area.
 - New Markdown docs should be English unless the file is explicitly language-specific.

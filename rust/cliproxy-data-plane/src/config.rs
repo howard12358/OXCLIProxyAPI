@@ -5,6 +5,10 @@ use clap::Parser;
 use cliproxy_runtime_config_client::{RuntimeConfigClientConfig, SnapshotSource};
 use cliproxy_upstream_runtime::{CodexConfig, OpenAiConfig, UpstreamRuntimeConfig};
 
+/// Rust 数据平面进程的启动配置。
+///
+/// 这层配置只负责进程监听、snapshot 拉取和上游执行运行时，不承载业务路由规则；
+/// 业务侧有效配置仍然来自 Go 导出的 runtime snapshot。
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "cliproxy-data-plane",
@@ -71,6 +75,7 @@ pub struct Config {
 }
 
 impl Config {
+    /// 组装 snapshot client 所需配置，并强制文件/HTTP 两种来源二选一。
     pub fn snapshot_client_config(&self) -> anyhow::Result<RuntimeConfigClientConfig> {
         let source = match (self.snapshot_file.clone(), self.snapshot_url.clone()) {
             (Some(path), None) => SnapshotSource::File { path },
@@ -96,6 +101,10 @@ impl Config {
         })
     }
 
+    /// 组装真实上游执行运行时配置。
+    ///
+    /// 这里处理的是进程级网络与凭证入口；真正使用哪个 model/auth，
+    /// 仍由请求时的 execution plan 决定。
     pub fn upstream_runtime_config(&self) -> UpstreamRuntimeConfig {
         UpstreamRuntimeConfig {
             upstream_proxy: self

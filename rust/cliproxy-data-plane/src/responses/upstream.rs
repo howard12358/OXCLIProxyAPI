@@ -20,6 +20,10 @@ use super::{
     ResponsesRequest, response_from_aggregated_json_body, response_from_body, response_with_stream,
 };
 
+/// 在路由已经选定 model/auth 后，执行真实上游请求链路。
+///
+/// 对 Codex 来说，即使下游是非流式客户端，也仍然先走流式上游，
+/// 这样 Rust 路径才能复用 CPA 的 SSE 修复与终态聚合逻辑。
 pub(super) async fn execute_real_upstream(
     upstream: UpstreamRuntime,
     request: ResponsesRequest,
@@ -152,6 +156,7 @@ async fn execute_upstream_with_retries(
     if let Some(auth) = selected_auth {
         if upstream.can_execute_for_auth(auth) {
             let mut last_error = None;
+            // 只有在下游响应还没提交时，才允许在 auth 绑定链内继续重试。
             for candidate in auth_retry_chain(snapshot, execution_plan, auth) {
                 match upstream
                     .execute_responses_for_auth(&candidate, request.clone(), proxy_override)
@@ -205,6 +210,7 @@ fn auth_retry_chain(
     chain
 }
 
+/// 下游首字节尚未提交前，auth 绑定错误是否允许切换到下一个候选 auth 的分类结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PrecommitRetryClassification {
     Retryable(&'static str),
@@ -291,6 +297,7 @@ pub(super) fn normalize_upstream_request(
     request: ResponsesRequest,
     execution_plan: &ExecutionPlan,
 ) -> ResponsesRequest {
+    // 把 provider 定制化请求整形收口到显式 request IR 后面。
     let ir = ResponsesRequestIr::from_downstream_request(&request);
     debug_assert!(!ir.model().trim().is_empty());
     ir.emit_upstream_request(execution_plan)
@@ -301,6 +308,8 @@ async fn aggregate_streaming_response_body(
     mut tail: cliproxy_upstream_runtime::ByteStream,
     telemetry: RequestTelemetry,
 ) -> Result<Bytes> {
+    // 非流式下游客户端仍然先经过 SSE 修复路径，再折叠回
+    // `response.completed.response` 里的终态 JSON。
     let mut framer = ResponsesSseFramer::default();
     let mut combined = Vec::new();
     for frame in framer.push_chunk(first_chunk) {

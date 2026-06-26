@@ -22,6 +22,7 @@ const RESPONSES_ENDPOINT: &str = "POST /v1/responses";
 const RUST_RESPONSES_EXECUTOR: &str = "RustResponsesExecutor";
 const DEFAULT_SERVICE_TIER: &str = "default";
 
+/// 应用级 telemetry 入口，负责为每个请求创建独立的观测上下文。
 #[derive(Clone)]
 pub struct AppTelemetry {
     usage_events: UsageEventProducer,
@@ -86,6 +87,7 @@ struct RequestTelemetryState {
     finished: AtomicBool,
 }
 
+/// 单个 `/v1/responses` 请求在 Rust 数据平面里的生命周期观测对象。
 #[derive(Clone)]
 pub struct RequestTelemetry {
     app: AppTelemetry,
@@ -373,6 +375,7 @@ impl RequestTelemetry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// 从 JSON response 或 SSE 事件里抽取出来的统一 usage 观察结果。
 struct UsageObservation {
     response_id: Option<String>,
     tokens: UsageQueueTokens,
@@ -465,6 +468,7 @@ impl UsageObservation {
     }
 }
 
+/// 流式请求完成保护器，确保成功或失败路径只会收口一次。
 pub struct StreamCompletionGuard {
     telemetry: RequestTelemetry,
     completed: bool,
