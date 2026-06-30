@@ -66,7 +66,6 @@
   - `protocol.rs` minimal request / stream-event protocol IR for `/v1/responses`
   - `upstream.rs` real upstream execution, request normalization, and auth retry
   - `sse.rs` SSE framing and completed-output repair
-  - `mock.rs` mock fallback responses
 - `rust/cliproxy-data-plane/crates/usage-events/`
   - CPA-shaped usage queue payload type and async producer for non-blocking sinks
 - `rust/cliproxy-data-plane/crates/upstream-runtime/src/lib.rs`
@@ -80,6 +79,7 @@
   - Go config/auth state -> runtime snapshot -> Rust pull / apply
 - Rust responses path:
   - request -> request IR -> runtime snapshot + router core -> upstream runtime -> stream-event IR + normalized downstream response -> CPA-shaped usage payload emission
+  - if no real upstream execution path can be constructed, return error immediately instead of synthesizing local mock responses
 
 ## Main Control Flow
 

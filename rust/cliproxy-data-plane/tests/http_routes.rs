@@ -178,7 +178,7 @@ async fn runtime_snapshot_endpoint_returns_applied_snapshot() {
 }
 
 #[tokio::test]
-async fn responses_stream_returns_normalized_sse_frames() {
+async fn responses_route_returns_bad_gateway_when_no_real_upstream_is_available() {
     let app = router(test_runtime(true), test_upstream());
     let response = app
         .oneshot(
@@ -194,25 +194,15 @@ async fn responses_stream_returns_normalized_sse_frames() {
         .await
         .expect("call app");
 
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get("content-type")
-            .and_then(|value| value.to_str().ok()),
-        Some("text/event-stream; charset=utf-8")
-    );
-
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     let body = response
         .into_body()
         .collect()
         .await
         .expect("collect body")
         .to_bytes();
-    let text = String::from_utf8(body.to_vec()).expect("valid utf8");
-    assert!(text.contains("event: response.created"));
-    assert!(text.contains("event: response.usage"));
-    assert!(text.contains("event: response.completed"));
+    let payload: Value = serde_json::from_slice(&body).expect("parse body");
+    assert_eq!(payload["error"]["code"], "upstream_unavailable");
 }
 
 #[tokio::test]

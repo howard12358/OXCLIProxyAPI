@@ -1,4 +1,4 @@
-use axum::{body::Body, http::Response, response::IntoResponse};
+use axum::{body::Body, http::Response};
 use cliproxy_common_types::{
     routing::ExecutionPlan,
     snapshot::{AuthRecord, RuntimeSnapshot},
@@ -11,14 +11,13 @@ use cliproxy_upstream_runtime::UpstreamRuntime;
 use crate::runtime::RuntimeStateHandle;
 use crate::telemetry::AppTelemetry;
 
-use super::mock::{non_streaming_response, streaming_response};
 use super::upstream::{execute_real_upstream, log_upstream_failure};
-use super::{ResponsesRequest, error_response, extract_metadata};
+use super::{ResponsesRequest, error_response};
 
 /// Rust 数据平面的 `/v1/responses` 主入口。
 ///
 /// 这里负责校验路由是否可用、基于当前 runtime snapshot 构建执行计划，
-/// 然后在真实上游和本地 mock fallback 之间做分流。
+/// 并在拿到可执行的真实 upstream 能力后直接进入主链路。
 pub async fn handle_responses(
     runtime: RuntimeStateHandle,
     router_core: RouterCore,
@@ -43,17 +42,6 @@ pub async fn handle_responses(
         );
     }
 
-    let request_meta = match extract_metadata(&request) {
-        Ok(meta) => meta,
-        Err(err) => {
-            request_telemetry.finish_error(400, &err.to_string());
-            return error_response(
-                axum::http::StatusCode::BAD_REQUEST,
-                &err.to_string(),
-                "invalid_request",
-            );
-        }
-    };
     let (snapshot, execution_plan) = match build_execution_plan(&runtime, &router_core, &request) {
         Ok(resolved) => resolved,
         Err(err) => {
@@ -68,71 +56,37 @@ pub async fn handle_responses(
     let selected_auth = auth_for_plan(snapshot.as_ref(), &execution_plan);
     request_telemetry.bind_execution_plan(&execution_plan, selected_auth);
 
-    // 只要全局 runtime 或当前选中的 auth 能执行真实上游，就优先走真实链路；
-    // 否则回退到本地 mock 路径。
-    if upstream_enabled_for_request(&upstream, selected_auth) {
-        return match execute_real_upstream(
-            upstream,
-            request,
-            snapshot.as_ref(),
-            &execution_plan,
-            selected_auth,
-            request_telemetry.clone(),
-        )
-        .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                log_upstream_failure(&err, &execution_plan);
-                request_telemetry.finish_error(502, &err.to_string());
-                error_response(
-                    axum::http::StatusCode::BAD_GATEWAY,
-                    &err.to_string(),
-                    "upstream_error",
-                )
-            }
-        };
+    // Rust 数据平面不再对 `/v1/responses` 做本地 mock 兜底；
+    // 只要无法构造真实上游执行能力，就直接返回错误，与 CPA 生产语义保持一致。
+    if !upstream_enabled_for_request(&upstream, selected_auth) {
+        let message = "responses upstream is not configured for selected auth";
+        request_telemetry.finish_error(502, message);
+        return error_response(
+            axum::http::StatusCode::BAD_GATEWAY,
+            message,
+            "upstream_unavailable",
+        );
     }
 
-    if request.stream {
-        match streaming_response(
-            request,
-            request_meta,
-            &execution_plan,
-            request_telemetry.clone(),
-        )
-        .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                request_telemetry.finish_error(502, &err.to_string());
-                error_response(
-                    axum::http::StatusCode::BAD_GATEWAY,
-                    &err.to_string(),
-                    "upstream_error",
-                )
-            }
-        }
-    } else {
-        match non_streaming_response(
-            request,
-            request_meta,
-            &execution_plan,
-            request_telemetry.clone(),
-        ) {
-            Ok(response) => {
-                request_telemetry.mark_first_byte();
-                request_telemetry.finish_success();
-                response.into_response()
-            }
-            Err(err) => {
-                request_telemetry.finish_error(502, &err.to_string());
-                error_response(
-                    axum::http::StatusCode::BAD_GATEWAY,
-                    &err.to_string(),
-                    "upstream_error",
-                )
-            }
+    match execute_real_upstream(
+        upstream,
+        request,
+        snapshot.as_ref(),
+        &execution_plan,
+        selected_auth,
+        request_telemetry.clone(),
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            log_upstream_failure(&err, &execution_plan);
+            request_telemetry.finish_error(502, &err.to_string());
+            error_response(
+                axum::http::StatusCode::BAD_GATEWAY,
+                &err.to_string(),
+                "upstream_error",
+            )
         }
     }
 }

@@ -12,7 +12,7 @@
 - runtime snapshot 契约基础类型
 - 本地文件和 HTTP snapshot 拉取
 - snapshot 校验、版本比较和运行时状态切换
-- `/v1/responses` handler / upstream / SSE / mock 分层实现
+- `/v1/responses` handler / upstream / SSE 分层实现
 - OpenAI / Codex 上游执行运行时 v1
 - `/v1/responses` 的最小 CPA usage queue 闭环
 
@@ -47,10 +47,17 @@ rust/cliproxy-data-plane/
 - `docs/design/` 存放设计方案
 - `docs/history/` 存放阶段性迁移和历史材料
 
+说明：
+
+- `src/responses/mock.rs` 仍作为历史文件保留在仓库里，但当前不参与活跃编译图，也不再承担生产路径 fallback。
+
 ## 运行方式
 
 ```bash
-cargo run -- --bind-addr 127.0.0.1:4100 --snapshot-file examples/runtime-snapshot.example.json
+cargo run -- \
+  --bind-addr 127.0.0.1:4100 \
+  --snapshot-url http://127.0.0.1:8317/v0/management/runtime-snapshot \
+  --snapshot-bearer-token test-management-key
 ```
 
 或使用 `Makefile`：
@@ -59,6 +66,10 @@ cargo run -- --bind-addr 127.0.0.1:4100 --snapshot-file examples/runtime-snapsho
 make run
 make run BIND_ADDR=127.0.0.1:4200 LOG_LEVEL=debug
 ```
+
+默认开发方式应连接 Go 管理面导出的真实 `runtime snapshot`，而不是依赖仓库内静态示例文件。
+
+如果只是在脱离 Go 的情况下做临时本地实验，代码仍然支持显式传入 `--snapshot-file`，但这不再作为默认示例路径。
 
 环境变量：
 
@@ -143,7 +154,8 @@ make run BIND_ADDR=127.0.0.1:4210
 - 支持 snapshot 校验和版本比较
 - 支持运行时状态的 `ready / degraded / failed` 切换
 - 提供 `/v1/responses` ingress
-- 支持 mock fallback 和真实 upstream 优先执行
+- 仅在可构造真实 upstream 时执行 `/v1/responses`
+- 真实 upstream 不可用时直接返回错误，不再走本地 mock fallback
 - 支持 OpenAI Responses HTTP upstream
 - 支持 Codex bearer-token HTTP upstream
 - 支持预提交 bootstrap、流式转发和非流式回包

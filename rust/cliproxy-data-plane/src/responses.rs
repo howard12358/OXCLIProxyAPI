@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod handler;
-mod mock;
 mod protocol;
 pub(crate) mod sse;
 mod upstream;
@@ -47,18 +46,8 @@ struct ErrorResponse {
     error: ErrorDetail,
 }
 
-/// mock 非流式回包使用的最小 completed response 结构。
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct MockCompletedResponse {
-    id: String,
-    object: &'static str,
-    model: String,
-    status: &'static str,
-    output: Vec<Value>,
-    usage: Value,
-}
-
-/// 从下游请求中抽取出来的轻量元信息，用于日志、mock 输出和粗粒度 token 估算。
+/// 从下游请求中抽取出来的轻量元信息，用于测试辅助、日志和粗粒度 token 估算。
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub(super) struct RequestMetadata {
     model: String,
@@ -66,13 +55,7 @@ pub(super) struct RequestMetadata {
     metadata_keys: usize,
 }
 
-/// mock 流式返回时使用的单个 SSE 事件描述。
-#[derive(Debug, Clone)]
-pub(super) struct MockSseEvent {
-    event: String,
-    payload: Value,
-}
-
+#[cfg(test)]
 fn extract_metadata(request: &ResponsesRequest) -> anyhow::Result<RequestMetadata> {
     let model = request.model.trim().to_string();
     if model.is_empty() {
@@ -102,6 +85,7 @@ fn extract_metadata(request: &ResponsesRequest) -> anyhow::Result<RequestMetadat
     })
 }
 
+#[cfg(test)]
 fn extract_prompt_preview(input: Option<&Value>) -> Option<String> {
     let input = input?;
     match input {
@@ -112,6 +96,7 @@ fn extract_prompt_preview(input: Option<&Value>) -> Option<String> {
     }
 }
 
+#[cfg(test)]
 fn extract_prompt_preview_from_value(value: &Value) -> Option<String> {
     match value {
         Value::String(text) => {
@@ -124,40 +109,13 @@ fn extract_prompt_preview_from_value(value: &Value) -> Option<String> {
     }
 }
 
+#[cfg(test)]
 fn truncate_preview(value: &str, max_chars: usize) -> String {
     let mut out = value.chars().take(max_chars).collect::<String>();
     if value.chars().count() > max_chars {
         out.push_str("...");
     }
     out
-}
-
-fn build_output_text(request_meta: &RequestMetadata) -> String {
-    format!(
-        "mock responses ingress accepted model={} preview={}",
-        request_meta.model, request_meta.prompt_preview
-    )
-}
-
-fn estimate_input_tokens(request_meta: &RequestMetadata) -> u64 {
-    request_meta.prompt_preview.chars().count().max(1) as u64
-}
-
-fn estimate_output_tokens(output: &[Value]) -> u64 {
-    output
-        .iter()
-        .map(|item| item.to_string().chars().count() as u64)
-        .sum::<u64>()
-        .max(1)
-}
-
-fn estimate_output_tokens_from_text(text: &str) -> u64 {
-    text.chars().count().max(1) as u64
-}
-
-fn mock_response_id(model: &str) -> String {
-    let normalized = model.replace(['/', ' '], "-");
-    format!("resp_mock_{normalized}")
 }
 
 fn error_response(status: StatusCode, message: &str, code: &'static str) -> Response<Body> {
@@ -259,10 +217,8 @@ mod tests {
 
     #[test]
     fn normalize_frame_has_event_and_data_lines() {
-        let frame = mock::normalize_sse_frame(&MockSseEvent {
-            event: "response.created".to_string(),
-            payload: json!({"type":"response.created"}),
-        });
+        let frame =
+            normalize_test_sse_frame("response.created", json!({"type":"response.created"}));
         let text = String::from_utf8(frame.to_vec()).expect("valid utf8");
         assert!(text.starts_with("event: response.created\n"));
         assert!(text.contains("data: {\"type\":\"response.created\"}\n\n"));
@@ -757,5 +713,22 @@ mod tests {
                 .map(str::trim_start)
                 .filter(|value| !value.is_empty())
         })
+    }
+
+    fn normalize_test_sse_frame(event: &str, payload: Value) -> Bytes {
+        let payload = serde_json::to_string(&payload).expect("serialize payload");
+        let mut frame = String::new();
+        if !event.trim().is_empty() {
+            frame.push_str("event: ");
+            frame.push_str(event.trim());
+            frame.push('\n');
+        }
+        for line in payload.lines() {
+            frame.push_str("data: ");
+            frame.push_str(line);
+            frame.push('\n');
+        }
+        frame.push('\n');
+        Bytes::from(frame)
     }
 }

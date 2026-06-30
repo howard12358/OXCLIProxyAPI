@@ -9,6 +9,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Rust data plane exists as a separate workspace and can serve `/v1/responses`.
 - Rust data plane consumes Go-exported runtime snapshot by file or HTTP.
 - Rust data plane now aligns milestone 8 with CPA usage-queue semantics instead of exposing a separate Prometheus-style route.
+- Rust `/v1/responses` no longer falls back to local mock responses when no real upstream is available.
 
 ## Implemented Capabilities
 
@@ -24,6 +25,7 @@ This document records durable repository-level state. It is not a per-session ta
   - `/v1/responses`
   - explicit minimal request IR + stream-event IR inside the `/v1/responses` pipeline
   - `/v1/responses` SSE frame repair and completed-output repair on the HTTP streaming path
+  - direct `502 upstream_unavailable` behavior when `/v1/responses` cannot construct a real upstream execution path
   - CPA-shaped usage queue payload emission for `/v1/responses` when `usage_queue.enabled=true` and `usage_queue.backend=redis`
   - async usage payload production with log-backed sink for `/v1/responses` requests
   - pre-commit auth retry classification for `/v1/responses`

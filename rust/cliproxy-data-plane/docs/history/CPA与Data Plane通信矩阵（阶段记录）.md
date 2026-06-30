@@ -9,6 +9,11 @@
 - 哪些通信已经实现
 - 哪些通信仍停留在设计阶段
 
+说明：
+
+- 本文档属于 `history/` 阶段记录，主要保留迁移过程中的阶段性判断。
+- 当前实现事实应以 `rust/cliproxy-data-plane/docs/current/` 和 `.ai-harness/shared/` 下的现状文档为准。
+
 ## 2. 总体原则
 
 当前设计下，CPA 与数据平面的通信遵循以下原则：
@@ -31,6 +36,7 @@
 文档更新时间：
 
 - 2026-06-17：已同步到“Go snapshot 导出已实现、Rust `/v1/responses` 可真实执行、Go 可选 sidecar 转发已实现”的状态
+- 2026-06-30：已同步到“Rust `/v1/responses` usage queue 最小闭环已落地、Prometheus-style metrics endpoint 未采用、无真实 upstream 时直接报错不再 mock fallback”的状态
 
 ## 3. 通信矩阵
 
@@ -42,10 +48,10 @@
 | 代理策略下发 | Rust 拉取 | Go CPA | 默认上游代理语义，如 `inherit` / `direct` / `socks5://...` | 本地 loopback HTTP | 否 | `【已设计】` 计划并入 `runtime snapshot`，仅作用于 `Rust -> Provider`，不作用于 `Go <-> Rust` |
 | 流量接入 | Client | Rust Data Plane | 当前聚焦 `/v1/responses`，后续再扩 `/v1/chat/completions` 等请求 | HTTP / SSE | 是 | Rust 已实现 `/v1/responses` ingress，并已接入 router-core 选路 |
 | 上游执行 | Rust Data Plane | Provider | OpenAI / Codex / Claude / Gemini 请求 | HTTP / WebSocket / SSE | 是 | Rust 已实现 OpenAI / Codex 的 `/responses` HTTP upstream v1，并已打通 Codex OAuth 真实执行；Claude / Gemini / WebSocket relay 仍未实现 |
-| usage 输出 | Rust Data Plane | Go CPA 或队列系统 | usage 事件 | queue / HTTP / 本地接口 | 否 | `【仅设计】` Rust 当前仅保留响应中的 usage 语义，正式 usage event 输出未实现 |
+| usage 输出 | Rust Data Plane | Go CPA 或队列系统 | usage 事件 | queue / 本地日志型 producer | 否 | `【已部分联通】` Rust 已能按 CPA-shaped payload 产生 `/v1/responses` usage 事件并投递到异步 producer；Go 侧正式消费协议仍未接入 |
 | 健康信号回传 | Rust Data Plane | Go CPA | `ready / degraded / failed`、错误摘要 | 管理接口 / 指标抓取 | 否 | `【当前交互点】` Rust 本地已有状态与 `/healthz`、`/readyz`，Go 未接入 |
 | auth 健康回传 | Rust Data Plane | Go CPA | auth unhealthy、cooldown 建议 | 管理接口 / 事件流 | 否 | `【仅设计】` 尚未实现 |
-| 指标采集 | 监控系统或 Go | Rust Data Plane | 请求数、首字节延迟、流时长等指标 | HTTP metrics endpoint | 否 | `【仅设计】` 尚未实现 |
+| 指标采集 | 监控系统或 Go | Rust Data Plane | 请求数、首字节延迟、流时长等指标 | `待确认` | 否 | `【仅设计】` 当前未暴露独立 HTTP metrics endpoint；运维最小闭环优先落在 health/readiness 与 usage queue |
 | 管理写操作 | Operator / Go 管理面 | Go CPA | 配置修改、auth 管理、OAuth 生命周期控制 | Go 内部管理 API | 否 | 已在 Go 侧存在 |
 | 热路径绕过 | Rust Data Plane | Client / Provider | 请求与响应主链路 | 直接连接 | 是 | 已形成 `/v1/responses -> Rust -> OpenAI/Codex upstream` 的基础闭环 |
 | 入口切流 | Go CPA | Rust Data Plane | 把 `/v1/responses` 请求转发给 sidecar | 本地 HTTP reverse proxy | 是 | `【已联通】` Go 已支持通过 `data-plane.responses-base-url` 可选转发 `/v1/responses` 与 `/backend-api/codex/responses` |
@@ -70,7 +76,7 @@ flowchart TD
 
     Rust -->|GET /v0/management/runtime-snapshot<br/>首次加载 + 定时刷新<br/>已实现| Go
 
-    Rust -.->|usage 事件上报<br/>未实现| Queue
+    Rust -.->|usage 事件上报<br/>已具备 RS 侧最小闭环| Queue
     Rust -.->|ready/degraded/failed 主动注册/回传<br/>未实现| Health
     Go -.->|基于 Rust 健康做摘流/分发<br/>未实现| Rust
     Rust -.->|auth unhealthy / cooldown 建议<br/>未实现| Auth
@@ -102,7 +108,7 @@ flowchart TD
     Health[实例健康管理]
     Auth[Auth 健康 / Cooldown]
 
-    Rust -.->|usage 事件| Queue
+    Rust -.->|usage 事件消费协议/接入仍未完成| Queue
     Rust -.->|状态回传| Go
     Go -.->|基于健康摘流/分发| Rust
     Rust -.->|auth 异常 / cooldown 建议| Go
@@ -146,9 +152,12 @@ flowchart TD
 
 还没有进入“当前交互点”或“已联通”的内容：
 
-- usage 回传
 - auth unhealthy / cooldown 回传
 - metrics 采集
+
+已经从“仅设计”推进到 Rust 侧最小闭环、但尚未形成 Go 侧完整消费协议的内容：
+
+- usage 回传
 
 这些还没有形成可供 CPA 直接对接的稳定接口。
 
@@ -178,7 +187,11 @@ flowchart TD
 - cooldown 建议
 - 严重错误信号
 
-这条链当前还没有完全定死协议，但已经明确这类回传不应把 Go 重新拉回请求主链路。
+这条链当前仍未完全定死协议，但已经有一个最小落地点：
+
+- Rust 已能为 `/v1/responses` 产出 CPA-shaped usage payload
+- Go 侧消费、订阅或队列协作协议仍待继续对齐
+- 这些回传都不应把 Go 重新拉回请求主链路
 
 ## 7. 热路径与非热路径边界
 
@@ -224,6 +237,8 @@ flowchart TD
 - `/v1/responses` ingress
 - OpenAI `/responses` upstream HTTP 执行
 - Codex `/responses` upstream HTTP 执行
+- `/v1/responses` 最小显式协议转换 IR
+- `/v1/responses` SSE 分帧修复与 parity fixture 覆盖
 - `router-core` 第一版
 - `ExecutionPlan`
 - model alias 解析
@@ -241,13 +256,15 @@ flowchart TD
   - 去掉 `metadata`
 - 对 Codex 上游的 `stream=false -> stream=true -> 聚合回非流式 JSON`
 - 可重试 Codex auth 失败后的自动切换执行
+- `/v1/responses` usage queue 最小闭环
+- 无真实 upstream 执行能力时直接返回 `502 upstream_unavailable`
+- `/v1/responses` 不再走本地 mock fallback 作为生产兜底
 
 ### 8.2 Rust 未实现
 
-- usage 事件输出
 - auth 健康信号回传
 - cooldown 建议回传
-- metrics endpoint
+- 独立 metrics endpoint
 - Claude / Gemini upstream adapter
 - WebSocket relay 型 upstream runtime
 - `/v1/chat/completions`、`/v1/messages` ingress
@@ -276,6 +293,7 @@ Go 未实现：
   - 已完成按 `auth_id` 的 Codex OAuth 执行绑定
 - 里程碑 5：已完成 MVP 所需最小子集
 - 里程碑 6：已完成 MVP 所需最小子集
+- 里程碑 8：已完成最小 usage 闭环
 - Go 侧已完成可选 sidecar 转发接入
 
 ## 9. 建议的最小落地顺序
@@ -286,7 +304,7 @@ Go 未实现：
 2. Rust 从 Go 拉真实 snapshot
 3. Rust 用真实 snapshot 驱动 `/v1/responses`
 4. Go 在显式配置下把 `/v1/responses` 切到 Rust sidecar
-5. Rust 向外暴露可供观测的健康和指标
+5. Rust 向外暴露可供观测的健康信号，并补最小 usage 回传
 6. 再逐步增加 usage / auth 健康 / cooldown 回传
 
 ## 10. 结论

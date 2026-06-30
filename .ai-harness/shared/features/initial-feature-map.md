@@ -70,6 +70,7 @@
   - serve `/v1/responses`
   - repair and normalize SSE frames on the `/v1/responses` HTTP streaming path
   - emit CPA-shaped `/v1/responses` usage queue payloads asynchronously through a log-backed producer
+  - fail `/v1/responses` with a direct upstream error when no real upstream execution path is available
   - consume runtime snapshot from Go
   - expose health / readiness / runtime snapshot observation
 - Entrypoints:

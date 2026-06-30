@@ -1,7 +1,8 @@
 APP_NAME := cliproxy-data-plane
 BIND_ADDR ?= 127.0.0.1:4100
 LOG_LEVEL ?= info
-SNAPSHOT_FILE ?= examples/runtime-snapshot.example.json
+SNAPSHOT_URL ?= http://127.0.0.1:8317/v0/management/runtime-snapshot
+SNAPSHOT_BEARER_TOKEN ?= test-management-key
 
 .PHONY: help run fmt check test build clean
 
@@ -18,13 +19,15 @@ help:
 	"可选变量：" \
 	"  BIND_ADDR=<host:port>  默认 $(BIND_ADDR)" \
 	"  LOG_LEVEL=<level>      默认 $(LOG_LEVEL)" \
-	"  SNAPSHOT_FILE=<path>   默认 $(SNAPSHOT_FILE)"
+	"  SNAPSHOT_URL=<url>     默认 $(SNAPSHOT_URL)" \
+	"  SNAPSHOT_BEARER_TOKEN=<token>  默认 $(SNAPSHOT_BEARER_TOKEN)"
 
 run:
 	CLIPROXY_BIND=$(BIND_ADDR) \
 	CLIPROXY_LOG=$(LOG_LEVEL) \
-	CLIPROXY_SNAPSHOT_FILE=$(SNAPSHOT_FILE) \
-	cargo run -- --bind-addr $(BIND_ADDR) --log-level $(LOG_LEVEL) --snapshot-file $(SNAPSHOT_FILE)
+	CLIPROXY_SNAPSHOT_URL=$(SNAPSHOT_URL) \
+	CLIPROXY_SNAPSHOT_BEARER_TOKEN=$(SNAPSHOT_BEARER_TOKEN) \
+	cargo run -- --bind-addr $(BIND_ADDR) --log-level $(LOG_LEVEL) --snapshot-url $(SNAPSHOT_URL) --snapshot-bearer-token $(SNAPSHOT_BEARER_TOKEN)
 
 fmt:
 	cargo fmt --all
