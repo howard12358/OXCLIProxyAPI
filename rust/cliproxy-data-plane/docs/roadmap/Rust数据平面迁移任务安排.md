@@ -101,7 +101,7 @@ rust/cliproxy-data-plane/
     可转发到 Rust 数据平面
 - 本地已有 `make dev-stack` 联调入口，可同时拉起 Go 管理平面与 Rust 数据平面
 
-### 当前里程碑状态总览（2026-06-26）
+### 当前里程碑状态总览（2026-06-30）
 
 | 里程碑 | 当前状态 | 未完成项 | 建议优先级 |
 | --- | --- | --- | --- |
@@ -113,7 +113,7 @@ rust/cliproxy-data-plane/
 | 里程碑 5：协议转换 IR v1 | 已完成显式 MVP 最小子集 | 没有独立 `protocol-translate` crate；canonical response IR 仍不完整；更多 provider-neutral parser/emitter 仍未抽出 | 中 |
 | 里程碑 6：SSE 修复与行为对齐 | 已完成 MVP 最小子集 | 缺少与 Go 全量 fixtures 的系统性 parity tests；malformed stream 回归覆盖还不算完整 | 高 |
 | 里程碑 7：扩展路由与 Provider | 未开始 | `/v1/chat/completions`、`/v1/messages`、Claude adapter、Gemini adapter、更多 provider/model routing 组合都还没接入 Rust 数据平面 | 低 |
-| 里程碑 8：Usage 事件与运维集成 | 已完成最小 CPA usage 闭环 | `usage-events` 已改为 CPA usage queue payload 形状，但仍只有 log sink；Rust 侧尚未直接暴露完整 redis 订阅 / pop 协议；auth 健康信号沉淀、cooldown 建议、runbook 都还没完整落地 | 最高 |
+| 里程碑 8：Usage 事件与运维集成 | 已完成 CPA usage 最小无感消费闭环 | Rust 已支持 Go snapshot usage_queue 配置、CPA-shaped payload 入本地 usage queue、HTTP pop、同端口 Redis RESP `AUTH` / `SUBSCRIBE usage/errors` / `LPOP/RPOP usage`；Go CPA 已通过 RESP subscribe-first bridge 把 RS usage 回填 CPA redisqueue，外部消费者可继续连接 CPA；Home 模式 `LPUSH usage`、errors payload 生产、auth 健康信号沉淀、cooldown 建议、runbook 仍未完整落地 | 高 |
 
 补充说明：
 

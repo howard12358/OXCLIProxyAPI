@@ -5,10 +5,14 @@ use axum::{
     http::{Request, StatusCode},
 };
 use cliproxy_common_types::snapshot::RoutingStrategy;
-use cliproxy_data_plane::http::{router, router_with_snapshot_client};
+use cliproxy_data_plane::http::{
+    router, router_with_snapshot_client, router_with_snapshot_client_and_usage_queue,
+};
+use cliproxy_data_plane::usage_queue::UsageQueue;
 use cliproxy_runtime_config_client::{
     RuntimeConfigClient, RuntimeConfigClientConfig, SnapshotSource,
 };
+use cliproxy_usage_events::{UsageQueueFail, UsageQueuePayload};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tempfile::NamedTempFile;
@@ -62,6 +66,55 @@ fn sse_data_payload(frame: &str) -> Option<String> {
         .filter_map(|line| line.trim().strip_prefix("data:").map(str::trim_start))
         .collect::<Vec<_>>();
     (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+#[tokio::test]
+async fn usage_queue_endpoint_pops_requested_records_once() {
+    let usage_queue = UsageQueue::new();
+    usage_queue.enqueue(UsageQueuePayload {
+        request_id: "req-1".to_string(),
+        fail: UsageQueueFail {
+            status_code: 200,
+            body: String::new(),
+        },
+        ..UsageQueuePayload::default()
+    });
+    usage_queue.enqueue(UsageQueuePayload {
+        request_id: "req-2".to_string(),
+        fail: UsageQueueFail {
+            status_code: 200,
+            body: String::new(),
+        },
+        ..UsageQueuePayload::default()
+    });
+
+    let app = router_with_snapshot_client_and_usage_queue(
+        test_runtime(true),
+        test_upstream(),
+        None,
+        usage_queue,
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v0/management/usage-queue?count=1")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("call app");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let payload: Value = serde_json::from_slice(&body).expect("parse body");
+    assert_eq!(payload.as_array().expect("array").len(), 1);
+    assert_eq!(payload[0]["request_id"], "req-1");
 }
 
 #[tokio::test]

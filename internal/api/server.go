@@ -240,6 +240,11 @@ type Server struct {
 	keepAliveOnTimeout func()
 	keepAliveHeartbeat chan struct{}
 	keepAliveStop      chan struct{}
+
+	dataPlaneUsageBridgeMu      sync.Mutex
+	dataPlaneUsageBridgeCancel  context.CancelFunc
+	dataPlaneUsageBridgeBaseURL string
+	dataPlaneUsageBridgeAuth    string
 }
 
 // NewServer creates and initializes a new API server instance.
@@ -371,6 +376,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	if hasManagementSecret {
 		s.registerManagementRoutes()
 	}
+	s.reconcileDataPlaneUsageBridge(cfg)
 	s.refreshPluginManagementRoutes()
 	engine.NoRoute(s.pluginManagementNoRoute)
 
@@ -1535,6 +1541,7 @@ func (s *Server) Start() error {
 //   - error: An error if the server fails to stop
 func (s *Server) Stop(ctx context.Context) error {
 	log.Debug("Stopping API server...")
+	s.stopDataPlaneUsageBridge()
 
 	if s.keepAliveEnabled {
 		select {
@@ -1700,6 +1707,7 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 
 	s.applyAccessConfig(oldCfg, cfg)
 	s.cfg = cfg
+	s.reconcileDataPlaneUsageBridge(cfg)
 	s.wsAuthEnabled.Store(cfg.WebsocketAuth)
 	if oldCfg != nil && s.wsAuthChanged != nil && oldCfg.WebsocketAuth != cfg.WebsocketAuth {
 		s.wsAuthChanged(oldCfg.WebsocketAuth, cfg.WebsocketAuth)

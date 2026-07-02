@@ -136,11 +136,25 @@ func BuildRuntimeSnapshot(cfg *config.Config, authManager *coreauth.Manager, now
 			UpstreamProxy: strings.TrimSpace(proxyURL(cfg)),
 		},
 		AuthPool:     exportedAuths,
-		UsageQueue:   UsageQueueConfig{},
+		UsageQueue:   buildUsageQueueConfig(cfg),
 		FeatureFlags: map[string]bool{},
 	}
 	snapshot.Version = buildSnapshotVersion(snapshot)
 	return snapshot
+}
+
+func buildUsageQueueConfig(cfg *config.Config) UsageQueueConfig {
+	if cfg == nil {
+		return UsageQueueConfig{}
+	}
+	enabled := cfg.UsageStatisticsEnabled && (strings.TrimSpace(cfg.RemoteManagement.SecretKey) != "" || cfg.Home.Enabled)
+	if !enabled {
+		return UsageQueueConfig{}
+	}
+	return UsageQueueConfig{
+		Enabled: true,
+		Backend: "redis",
+	}
 }
 
 func dataPlanePublicHTTP(cfg *config.Config) string {

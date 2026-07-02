@@ -18,6 +18,8 @@ use cliproxy_usage_events::{
 use serde_json::Value;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+use crate::usage_queue::UsageQueue;
+
 const RESPONSES_ENDPOINT: &str = "POST /v1/responses";
 const RUST_RESPONSES_EXECUTOR: &str = "RustResponsesExecutor";
 const DEFAULT_SERVICE_TIER: &str = "default";
@@ -25,13 +27,25 @@ const DEFAULT_SERVICE_TIER: &str = "default";
 /// 应用级 telemetry 入口，负责为每个请求创建独立的观测上下文。
 #[derive(Clone)]
 pub struct AppTelemetry {
-    usage_events: UsageEventProducer,
+    usage_sink: UsageSink,
+}
+
+#[derive(Clone)]
+enum UsageSink {
+    Producer(UsageEventProducer),
+    Queue(UsageQueue),
 }
 
 impl AppTelemetry {
     pub fn new() -> Self {
         Self {
-            usage_events: UsageEventProducer::new_log(256),
+            usage_sink: UsageSink::Producer(UsageEventProducer::new_log(256)),
+        }
+    }
+
+    pub fn new_with_usage_queue(usage_queue: UsageQueue) -> Self {
+        Self {
+            usage_sink: UsageSink::Queue(usage_queue),
         }
     }
 
@@ -62,7 +76,12 @@ impl AppTelemetry {
 impl AppTelemetry {
     fn new_test(buffer: usize) -> (Self, tokio::sync::mpsc::Receiver<UsageQueuePayload>) {
         let (usage_events, rx) = UsageEventProducer::new_channel(buffer);
-        (Self { usage_events }, rx)
+        (
+            Self {
+                usage_sink: UsageSink::Producer(usage_events),
+            },
+            rx,
+        )
     }
 }
 
@@ -238,7 +257,7 @@ impl RequestTelemetry {
             reasoning_effort: String::new(),
             service_tier: DEFAULT_SERVICE_TIER.to_string(),
         };
-        let _ = self.app.usage_events.try_emit(payload);
+        self.app.emit_usage_payload(payload);
     }
 
     /// 把一次 usage 观察结果写回请求状态，供最终 usage payload 收口使用。
@@ -382,6 +401,17 @@ impl RequestTelemetry {
             .lock()
             .expect("response_headers lock poisoned")
             .clone()
+    }
+}
+
+impl AppTelemetry {
+    fn emit_usage_payload(&self, payload: UsageQueuePayload) {
+        match &self.usage_sink {
+            UsageSink::Producer(producer) => {
+                let _ = producer.try_emit(payload);
+            }
+            UsageSink::Queue(queue) => queue.enqueue(payload),
+        }
     }
 }
 

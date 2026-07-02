@@ -14,7 +14,7 @@
 - snapshot 校验、版本比较和运行时状态切换
 - `/v1/responses` handler / upstream / SSE 分层实现
 - OpenAI / Codex 上游执行运行时 v1
-- `/v1/responses` 的最小 CPA usage queue 闭环
+- `/v1/responses` 的 CPA usage queue 最小无感消费闭环
 
 ## 当前目录结构
 
@@ -23,6 +23,7 @@ rust/cliproxy-data-plane/
   docs/
     README.md
     current/
+    roadmap/
     design/
     history/
   crates/
@@ -37,13 +38,16 @@ rust/cliproxy-data-plane/
       upstream.rs
       sse.rs
       mock.rs
+    redis_protocol.rs
     telemetry.rs
+    usage_queue.rs
 ```
 
 文档入口：
 
 - `docs/README.md`
 - `docs/current/` 存放当前事实文档
+- `docs/roadmap/` 存放迁移任务和里程碑状态
 - `docs/design/` 存放设计方案
 - `docs/history/` 存放阶段性迁移和历史材料
 
@@ -100,7 +104,9 @@ make run BIND_ADDR=127.0.0.1:4200 LOG_LEVEL=debug
 
 - `GET /healthz`
 - `GET /readyz`
+- `GET /v0/management/usage-queue`
 - `POST /v1/responses`
+- 同端口 Redis RESP：`AUTH`、`SUBSCRIBE usage/errors`、`LPOP/RPOP usage`
 
 示例：
 
@@ -162,4 +168,4 @@ make run BIND_ADDR=127.0.0.1:4210
 
 ## 下一步
 
-- 补齐 CPA redis usage 协议侧的对外消费链路
+- 补齐 Home 模式 `LPUSH usage` 转发、errors 通道生产来源和 usage 运维 runbook

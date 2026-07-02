@@ -36,7 +36,7 @@
 - `docs/`
   - SDK docs and related documentation
 - `rust/cliproxy-data-plane/docs/`
-  - Rust data-plane docs split by `current/`, `design/`, and `history/`
+  - Rust data-plane docs split by `current/`, `roadmap/`, `design/`, and `history/`
 
 ## Core Module Responsibilities
 
@@ -48,6 +48,8 @@
   - Build runtime snapshot exported from Go
 - `internal/dataplane/notifier/`
   - Notify Rust data plane when effective snapshot version changes
+- `internal/api/dataplane_usage_bridge.go`
+  - Subscribe to Rust data-plane usage queue and re-enqueue records into CPA `internal/redisqueue` so external consumers can keep reading from CPA
 - `internal/watcher/`
   - React to config and auth file changes
 - `sdk/cliproxy/`
@@ -56,8 +58,12 @@
   - Hold current runtime snapshot and runtime metadata
 - `rust/cliproxy-data-plane/src/http.rs`
   - Rust HTTP routes for health, readiness, snapshot inspection, notify, and `/v1/responses`
+- `rust/cliproxy-data-plane/src/usage_queue.rs`
+  - CPA-compatible in-memory usage queue, subscriber fan-out, refresh control payload, and pop semantics
+- `rust/cliproxy-data-plane/src/redis_protocol.rs`
+  - CPA-compatible Redis RESP usage consumer protocol for `AUTH`, `SUBSCRIBE`, `LPOP`, and `RPOP`
 - `rust/cliproxy-data-plane/src/telemetry.rs`
-  - Request lifecycle telemetry, extracted usage observation helper, and CPA-shaped async usage payload emission
+  - Request lifecycle telemetry, extracted usage observation helper, and CPA-shaped usage payload emission into the local usage queue
 - `rust/cliproxy-data-plane/src/responses.rs`
   - Rust `/v1/responses` parent module with shared request/response types, helpers, and unit tests
 - `rust/cliproxy-data-plane/src/responses/`
@@ -80,6 +86,14 @@
 - Rust responses path:
   - request -> request IR -> runtime snapshot + router core -> upstream runtime -> stream-event IR + normalized downstream response -> CPA-shaped usage payload emission
   - if no real upstream execution path can be constructed, return error immediately instead of synthesizing local mock responses
+- Rust usage-consumption path:
+  - `/v1/responses` telemetry -> local CPA-compatible usage queue
+  - HTTP consumers can pop records with `/v0/management/usage-queue?count=N`
+  - Redis RESP consumers can use the same TCP listener with `AUTH`, `SUBSCRIBE usage/errors`, and `LPOP/RPOP usage`
+- External CPA usage-consumer path:
+  - `cpa-usage-keeper` and other external consumers can continue connecting to CPA
+  - when Go routes `/v1/responses` to Rust and usage statistics are enabled, CPA subscribes to Rust `usage` over Redis RESP and writes those records back into CPA `internal/redisqueue`
+  - if RESP subscription is unavailable or disconnects, CPA falls back to Rust `/v0/management/usage-queue?count=64` before retrying the RESP subscription
 
 ## Main Control Flow
 
@@ -94,7 +108,7 @@
   - build snapshot client
   - initial snapshot load
   - start periodic refresh
-  - serve HTTP routes
+  - serve HTTP routes and Redis RESP usage consumers on the same TCP listener by sniffing the first connection byte
 
 ## Error Handling Strategy
 

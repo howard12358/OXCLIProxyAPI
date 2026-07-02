@@ -9,6 +9,8 @@ This document records durable repository-level state. It is not a per-session ta
 - Rust data plane exists as a separate workspace and can serve `/v1/responses`.
 - Rust data plane consumes Go-exported runtime snapshot by file or HTTP.
 - Rust data plane now aligns milestone 8 with CPA usage-queue semantics instead of exposing a separate Prometheus-style route.
+- Rust data plane accepts HTTP and CPA-compatible Redis RESP usage-consumer traffic on the same TCP listener by sniffing the first connection byte.
+- Go CPA now bridges Rust data-plane usage queue records back into CPA `internal/redisqueue` with RESP `SUBSCRIBE usage` first and HTTP pop fallback, so external usage consumers can keep connecting to CPA.
 - Rust `/v1/responses` no longer falls back to local mock responses when no real upstream is available.
 
 ## Implemented Capabilities
@@ -27,7 +29,10 @@ This document records durable repository-level state. It is not a per-session ta
   - `/v1/responses` SSE frame repair and completed-output repair on the HTTP streaming path
   - direct `502 upstream_unavailable` behavior when `/v1/responses` cannot construct a real upstream execution path
   - CPA-shaped usage queue payload emission for `/v1/responses` when `usage_queue.enabled=true` and `usage_queue.backend=redis`
-  - async usage payload production with log-backed sink for `/v1/responses` requests
+  - CPA-compatible in-memory usage queue with subscriber fan-out, `support_refresh` / `refresh` control payloads, and pop semantics
+  - HTTP usage queue pop endpoint at `/v0/management/usage-queue`
+  - Redis RESP usage protocol support for `AUTH`, `SUBSCRIBE usage/errors`, `LPOP usage`, and `RPOP usage`
+  - Go-side data-plane usage bridge that subscribes to Rust `usage` over Redis RESP and re-enqueues records into CPA redisqueue, with HTTP pop fallback
   - pre-commit auth retry classification for `/v1/responses`
   - upstream request/response redaction helpers for logging
   - snapshot notify endpoint
@@ -60,7 +65,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Rust data-plane productization work may diverge from Go behavior if proxy, routing, or auth semantics are changed in only one runtime.
 - Test coverage appears stronger in selected areas than for full end-to-end production flows.
 - Some architectural intent lives in docs and current worktree changes, not only in released code.
-- Rust currently emits CPA-shaped usage payloads but does not yet expose the full CPA redis subscription/pop protocol from the Rust process.
+- Rust usage queue now exposes the CPA-compatible HTTP and RESP consumption paths, and CPA bridges Rust usage back into the external CPA queue. Home-mode direct Rust `LPUSH usage` forwarding is still not implemented.
 - Rust milestone-6 parity coverage now includes fixture-driven SSE framer checks derived from Go stream-repair samples, including malformed blank-line event/data cases, but it is still not a full Go fixture mirror.
 
 ## Collaboration Boundaries

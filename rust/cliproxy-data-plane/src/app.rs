@@ -1,12 +1,19 @@
 use anyhow::Result;
 use cliproxy_runtime_config_client::RuntimeConfigClient;
 use cliproxy_upstream_runtime::UpstreamRuntime;
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo},
+    server::conn::auto::Builder as HyperBuilder,
+    service::TowerToHyperService,
+};
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::config::Config;
 use crate::http;
+use crate::redis_protocol;
 use crate::runtime::RuntimeStateHandle;
+use crate::usage_queue::UsageQueue;
 
 /// Rust 数据平面进程的主启动流程。
 ///
@@ -31,11 +38,48 @@ pub async fn run(config: Config) -> Result<()> {
 
     let listener = TcpListener::bind(config.bind_addr).await?;
     let local_addr = listener.local_addr()?;
-    let app =
-        http::router_with_snapshot_client(runtime_state, upstream_runtime, Some(snapshot_client));
+    let usage_queue = UsageQueue::new();
+    let redis_auth_password = config.snapshot_bearer_token.clone();
+    let app = http::router_with_snapshot_client_and_usage_queue(
+        runtime_state,
+        upstream_runtime,
+        Some(snapshot_client),
+        usage_queue.clone(),
+    );
 
     info!(address = %local_addr, "data plane listening");
 
-    axum::serve(listener, app).await?;
-    Ok(())
+    loop {
+        let (stream, peer_addr) = listener.accept().await?;
+        let app = app.clone();
+        let usage_queue = usage_queue.clone();
+        let redis_auth_password = redis_auth_password.clone();
+        tokio::spawn(async move {
+            let mut prefix = [0; 1];
+            match stream.peek(&mut prefix).await {
+                Ok(0) => {}
+                Ok(_) if redis_protocol::is_resp_prefix(prefix[0]) => {
+                    if let Err(err) =
+                        redis_protocol::handle_connection(stream, usage_queue, redis_auth_password)
+                            .await
+                    {
+                        error!(%peer_addr, error = %err, "redis usage protocol connection failed");
+                    }
+                }
+                Ok(_) => {
+                    let io = TokioIo::new(stream);
+                    let service = TowerToHyperService::new(app);
+                    if let Err(err) = HyperBuilder::new(TokioExecutor::new())
+                        .serve_connection(io, service)
+                        .await
+                    {
+                        error!(%peer_addr, error = %err, "http connection failed");
+                    }
+                }
+                Err(err) => {
+                    error!(%peer_addr, error = %err, "connection protocol sniff failed");
+                }
+            }
+        });
+    }
 }

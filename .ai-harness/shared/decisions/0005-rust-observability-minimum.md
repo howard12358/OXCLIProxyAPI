@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by `0003-rust-usage-queue-protocol.md`
 
 ## Context
 
@@ -49,9 +49,9 @@ Rust 数据平面已经具备 `/v1/responses` 的 MVP 主链路，但在切流�
 
 代价与风险：
 
-- 首版 sink 仍只有日志输出，离完整 CPA redis 协议对接仍有距离
+- 首版 sink 只有日志输出，后续已由 `0003-rust-usage-queue-protocol.md` 补为本地 usage queue 与 HTTP/RESP 消费协议
 - 当前 snapshot 不包含 CPA usage payload 所有细粒度字段，部分字段只能用现有可得信息回填或留空
-- Rust 进程尚未直接暴露 CPA redis 订阅 / pop 协议
+- Home 模式 `LPUSH usage` 转发和 errors 通道生产来源仍未补齐
 
 ## Alternatives Considered
 

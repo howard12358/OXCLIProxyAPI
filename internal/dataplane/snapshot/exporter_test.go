@@ -116,6 +116,24 @@ func TestBuildRuntimeSnapshotUsesRuntimeResponsesBaseURLOverride(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeSnapshotExportsUsageQueueConfig(t *testing.T) {
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+
+	snapshot := BuildRuntimeSnapshot(&config.Config{
+		RemoteManagement: config.RemoteManagement{
+			SecretKey: "management-key",
+		},
+		UsageStatisticsEnabled: true,
+	}, coreauth.NewManager(nil, nil, nil), now)
+
+	if !snapshot.UsageQueue.Enabled {
+		t.Fatal("usage_queue.enabled = false, want true")
+	}
+	if snapshot.UsageQueue.Backend != "redis" {
+		t.Fatalf("usage_queue.backend = %q, want redis", snapshot.UsageQueue.Backend)
+	}
+}
+
 func TestBuildRuntimeSnapshotSkipsDisabledAndMissingTokenAuths(t *testing.T) {
 	manager := coreauth.NewManager(nil, nil, nil)
 	_, _ = manager.Register(context.Background(), &coreauth.Auth{

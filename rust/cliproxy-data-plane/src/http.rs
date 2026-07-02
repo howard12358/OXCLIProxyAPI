@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{State, rejection::JsonRejection},
+    extract::{Query, State, rejection::JsonRejection},
     http::HeaderMap,
     response::IntoResponse,
     routing::{get, post},
@@ -16,6 +16,7 @@ use tracing::info;
 use crate::responses::{ResponsesRequest, handle_responses};
 use crate::runtime::{RuntimeInfo, RuntimeStateHandle};
 use crate::telemetry::AppTelemetry;
+use crate::usage_queue::UsageQueue;
 
 /// Axum 路由共享状态。
 ///
@@ -28,6 +29,7 @@ struct AppState {
     router_core: RouterCore,
     upstream: UpstreamRuntime,
     telemetry: AppTelemetry,
+    usage_queue: UsageQueue,
 }
 
 /// `/healthz` 的轻量健康响应，只反映进程当前服务状态。
@@ -69,6 +71,20 @@ pub fn router_with_snapshot_client(
     upstream: UpstreamRuntime,
     snapshot_client: Option<RuntimeConfigClient>,
 ) -> Router {
+    router_with_snapshot_client_and_usage_queue(
+        runtime,
+        upstream,
+        snapshot_client,
+        UsageQueue::new(),
+    )
+}
+
+pub fn router_with_snapshot_client_and_usage_queue(
+    runtime: RuntimeStateHandle,
+    upstream: UpstreamRuntime,
+    snapshot_client: Option<RuntimeConfigClient>,
+    usage_queue: UsageQueue,
+) -> Router {
     // HTTP 层只负责暴露固定管理/数据面入口，真正的路由选择在
     // `/v1/responses` 内部再交给 router-core。
     let state = AppState {
@@ -76,16 +92,23 @@ pub fn router_with_snapshot_client(
         snapshot_client,
         router_core: RouterCore::new(),
         upstream,
-        telemetry: AppTelemetry::new(),
+        telemetry: AppTelemetry::new_with_usage_queue(usage_queue.clone()),
+        usage_queue,
     };
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/v0/runtime/snapshot", get(get_runtime_snapshot))
         .route("/v0/runtime/snapshot-notify", post(post_snapshot_notify))
+        .route("/v0/management/usage-queue", get(get_usage_queue))
         .route("/v1/responses", post(post_responses))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
+}
+
+#[derive(Debug, Deserialize)]
+struct UsageQueueQuery {
+    count: Option<usize>,
 }
 
 async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
@@ -104,6 +127,25 @@ async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
         status: runtime.state,
         runtime,
     })
+}
+
+/// CPA 兼容的 usage queue HTTP pop 入口。
+///
+/// 语义与 Go 管理面保持一致：`count` 省略时弹出 1 条，弹出后即消费。
+async fn get_usage_queue(
+    State(state): State<AppState>,
+    Query(query): Query<UsageQueueQuery>,
+) -> impl IntoResponse {
+    let count = query.count.unwrap_or(1);
+    if count == 0 {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"count must be a positive integer"})),
+        )
+            .into_response();
+    }
+
+    Json(state.usage_queue.pop_oldest_json(count)).into_response()
 }
 
 /// 返回当前已经应用到 Rust 进程内存中的 runtime snapshot。
