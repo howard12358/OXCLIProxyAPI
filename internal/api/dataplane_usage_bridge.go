@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -32,7 +33,7 @@ func (s *Server) reconcileDataPlaneUsageBridge(cfg *config.Config) {
 		s.stopDataPlaneUsageBridge()
 		return
 	}
-	authPassword := strings.TrimSpace(s.localPassword)
+	authPassword := dataPlaneUsageBridgeAuthPassword(s.localPassword)
 
 	s.dataPlaneUsageBridgeMu.Lock()
 	if s.dataPlaneUsageBridgeCancel != nil &&
@@ -83,6 +84,13 @@ func dataPlaneUsageBridgeBaseURL(cfg *config.Config) string {
 		return ""
 	}
 	return baseURL
+}
+
+func dataPlaneUsageBridgeAuthPassword(localPassword string) string {
+	if password := strings.TrimSpace(localPassword); password != "" {
+		return password
+	}
+	return strings.TrimSpace(os.Getenv("MANAGEMENT_PASSWORD"))
 }
 
 func runDataPlaneUsageBridge(ctx context.Context, baseURL string, authPassword string) {
@@ -262,6 +270,13 @@ func readBridgeRESPSimpleString(reader *bufio.Reader) (string, error) {
 	prefix, errRead := reader.ReadByte()
 	if errRead != nil {
 		return "", errRead
+	}
+	if prefix == '-' {
+		line, errLine := readBridgeRESPLine(reader)
+		if errLine != nil {
+			return "", errLine
+		}
+		return "", fmt.Errorf("%s", strings.TrimSpace(line))
 	}
 	if prefix != '+' {
 		return "", fmt.Errorf("expected simple string prefix '+', got %q", prefix)

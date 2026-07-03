@@ -154,6 +154,31 @@ func TestDataPlaneUsageBridgeBaseURLRequiresUsageAndQueue(t *testing.T) {
 	}
 }
 
+func TestDataPlaneUsageBridgeAuthPasswordUsesLocalPasswordFirst(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "env-token")
+
+	if got := dataPlaneUsageBridgeAuthPassword("local-token"); got != "local-token" {
+		t.Fatalf("auth password = %q, want local-token", got)
+	}
+}
+
+func TestDataPlaneUsageBridgeAuthPasswordFallsBackToManagementPasswordEnv(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", " env-token ")
+
+	if got := dataPlaneUsageBridgeAuthPassword(""); got != "env-token" {
+		t.Fatalf("auth password = %q, want env-token", got)
+	}
+}
+
+func TestReadBridgeRESPSimpleStringReturnsErrorFrameMessage(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("-ERR invalid password\r\n"))
+
+	_, err := readBridgeRESPSimpleString(reader)
+	if err == nil || err.Error() != "ERR invalid password" {
+		t.Fatalf("error = %v, want ERR invalid password", err)
+	}
+}
+
 func withDataPlaneUsageBridgeQueue(t *testing.T, fn func()) {
 	t.Helper()
 	prevEnabled := redisqueue.Enabled()

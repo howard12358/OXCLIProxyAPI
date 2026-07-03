@@ -69,7 +69,7 @@ dev-stack:
 	mkdir -p "$(TMP_DIR)"; \
 	$(MAKE) stop-stack >/dev/null; \
 	echo "启动 Go 管理平面..."; \
-	nohup go run ./cmd/server --config "$(GO_CONFIG)" >"$(GO_LOG_FILE)" 2>&1 & echo $$! >"$(GO_PID_FILE)"; \
+	nohup env MANAGEMENT_PASSWORD="$(MANAGEMENT_KEY)" go run ./cmd/server --config "$(GO_CONFIG)" >"$(GO_LOG_FILE)" 2>&1 & echo $$! >"$(GO_PID_FILE)"; \
 	for i in $$(seq 1 30); do \
 		if curl -sf "$(GO_HEALTH_URL)" >/dev/null; then \
 			break; \
@@ -105,7 +105,7 @@ dev-stack-url:
 	mkdir -p "$(TMP_DIR)"; \
 	$(MAKE) stop-stack >/dev/null; \
 	echo "启动 Go 管理平面..."; \
-	nohup go run ./cmd/server --config "$(GO_CONFIG)" >"$(GO_LOG_FILE)" 2>&1 & echo $$! >"$(GO_PID_FILE)"; \
+	nohup env MANAGEMENT_PASSWORD="$(MANAGEMENT_KEY)" go run ./cmd/server --config "$(GO_CONFIG)" >"$(GO_LOG_FILE)" 2>&1 & echo $$! >"$(GO_PID_FILE)"; \
 	for i in $$(seq 1 30); do \
 		if curl -sf "$(GO_HEALTH_URL)" >/dev/null; then \
 			break; \
@@ -168,6 +168,14 @@ diff-snapshots:
 
 stop-stack:
 	@set -euo pipefail; \
+	go_port="$${GO_ADDR##*:}"; \
+	rust_port="$${RUST_BIND_ADDR##*:}"; \
+	for port in "$$rust_port" "$$go_port"; do \
+		for pid in $$(lsof -tiTCP:$$port -sTCP:LISTEN 2>/dev/null || true); do \
+			kill $$pid 2>/dev/null || true; \
+		done; \
+	done; \
+	sleep 1; \
 	for file in "$(RUST_PID_FILE)" "$(GO_PID_FILE)"; do \
 		if [[ -f $$file ]]; then \
 			pid=$$(cat $$file); \
@@ -178,8 +186,6 @@ stop-stack:
 			rm -f $$file; \
 		fi; \
 	done; \
-	go_port="$${GO_ADDR##*:}"; \
-	rust_port="$${RUST_BIND_ADDR##*:}"; \
 	for port in "$$go_port" "$$rust_port"; do \
 		for pid in $$(lsof -tiTCP:$$port -sTCP:LISTEN 2>/dev/null || true); do \
 			kill $$pid 2>/dev/null || true; \

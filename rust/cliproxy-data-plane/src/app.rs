@@ -6,7 +6,7 @@ use hyper_util::{
     server::conn::auto::Builder as HyperBuilder,
     service::TowerToHyperService,
 };
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::watch};
 use tracing::{error, info};
 
 use crate::config::Config;
@@ -49,8 +49,35 @@ pub async fn run(config: Config) -> Result<()> {
 
     info!(address = %local_addr, "data plane listening");
 
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    tokio::spawn(async move {
+        let signal = shutdown_signal().await;
+        info!(signal, "shutdown signal received");
+        let _ = shutdown_tx.send(true);
+    });
+
+    serve_listener(listener, app, usage_queue, redis_auth_password, shutdown_rx).await?;
+    info!("data plane stopped");
+    Ok(())
+}
+
+async fn serve_listener(
+    listener: TcpListener,
+    app: axum::Router,
+    usage_queue: UsageQueue,
+    redis_auth_password: Option<String>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> Result<()> {
     loop {
-        let (stream, peer_addr) = listener.accept().await?;
+        let (stream, peer_addr) = tokio::select! {
+            accept_result = listener.accept() => accept_result?,
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    return Ok(());
+                }
+                continue;
+            }
+        };
         let app = app.clone();
         let usage_queue = usage_queue.clone();
         let redis_auth_password = redis_auth_password.clone();
@@ -81,5 +108,55 @@ pub async fn run(config: Config) -> Result<()> {
                 }
             }
         });
+    }
+}
+
+async fn shutdown_signal() -> &'static str {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+        "ctrl_c"
+    };
+
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        let terminate = async {
+            match signal(SignalKind::terminate()) {
+                Ok(mut stream) => {
+                    let _ = stream.recv().await;
+                    "sigterm"
+                }
+                Err(_) => "sigterm_unavailable",
+            }
+        };
+
+        tokio::select! {
+            signal = ctrl_c => signal,
+            signal = terminate => signal,
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        ctrl_c.await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::watch;
+
+    #[tokio::test]
+    async fn serve_listener_returns_when_shutdown_is_requested() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let (tx, rx) = watch::channel(false);
+        tx.send(true).expect("send shutdown");
+
+        let result =
+            serve_listener(listener, axum::Router::new(), UsageQueue::new(), None, rx).await;
+
+        assert!(result.is_ok());
     }
 }

@@ -11,6 +11,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Rust data plane now aligns milestone 8 with CPA usage-queue semantics instead of exposing a separate Prometheus-style route.
 - Rust data plane accepts HTTP and CPA-compatible Redis RESP usage-consumer traffic on the same TCP listener by sniffing the first connection byte.
 - Go CPA now bridges Rust data-plane usage queue records back into CPA `internal/redisqueue` with RESP `SUBSCRIBE usage` first and HTTP pop fallback, so external usage consumers can keep connecting to CPA.
+- External dev-stack usage bridging now aligns Go `MANAGEMENT_PASSWORD` with Rust `--snapshot-bearer-token`, so the preferred RESP subscription path authenticates in `make dev-stack-url`.
 - Rust `/v1/responses` no longer falls back to local mock responses when no real upstream is available.
 
 ## Implemented Capabilities
@@ -33,10 +34,12 @@ This document records durable repository-level state. It is not a per-session ta
   - HTTP usage queue pop endpoint at `/v0/management/usage-queue`
   - Redis RESP usage protocol support for `AUTH`, `SUBSCRIBE usage/errors`, `LPOP usage`, and `RPOP usage`
   - Go-side data-plane usage bridge that subscribes to Rust `usage` over Redis RESP and re-enqueues records into CPA redisqueue, with HTTP pop fallback
+  - Go-side bridge auth selection that uses the embedded/local management password first and falls back to `MANAGEMENT_PASSWORD` for external data-plane dev stacks
   - pre-commit auth retry classification for `/v1/responses`
   - upstream request/response redaction helpers for logging
   - snapshot notify endpoint
   - runtime snapshot observation endpoint
+  - graceful SIGTERM / Ctrl-C shutdown logging for the Rust data-plane listener
 
 ## Unfinished Or 待确认 Capabilities
 

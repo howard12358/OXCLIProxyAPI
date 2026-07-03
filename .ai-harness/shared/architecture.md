@@ -93,6 +93,7 @@
 - External CPA usage-consumer path:
   - `cpa-usage-keeper` and other external consumers can continue connecting to CPA
   - when Go routes `/v1/responses` to Rust and usage statistics are enabled, CPA subscribes to Rust `usage` over Redis RESP and writes those records back into CPA `internal/redisqueue`
+  - bridge RESP auth uses the embedded/local management password when available, otherwise the plaintext `MANAGEMENT_PASSWORD` environment variable used by external dev-stack snapshot auth
   - if RESP subscription is unavailable or disconnects, CPA falls back to Rust `/v0/management/usage-queue?count=64` before retrying the RESP subscription
 
 ## Main Control Flow
@@ -109,6 +110,7 @@
   - initial snapshot load
   - start periodic refresh
   - serve HTTP routes and Redis RESP usage consumers on the same TCP listener by sniffing the first connection byte
+  - handle SIGTERM / Ctrl-C with graceful listener shutdown logs
 
 ## Error Handling Strategy
 

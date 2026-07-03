@@ -33,6 +33,28 @@ Accepted
 
 同时新增 `rust/cliproxy-data-plane/docs/README.md` 作为目录索引，并使用描述性中文文件名代替单纯的数字前缀。
 
+2026-07-03 修订：
+
+- 保留 `current/`、`roadmap/`、`design/`、`history/` 的用途分类。
+- Rust 数据平面文档文件名统一使用中文命名，保持与现有文档语言一致：
+  - `current/当前架构说明.md`
+  - `current/运行时快照契约.md`
+  - `current/v1接口矩阵说明.md`
+  - `current/用量队列契约与差距.md`
+  - `roadmap/Rust数据平面迁移路线图.md`
+  - `design/Go管理Rust数据平面产品化设计.md`
+- 早期《管理平面与数据平面拆分设计》移动到 `history/`，作为背景材料保留，不再作为当前实现事实来源。
+- `docs/README.md` 明确事实来源优先级：`.ai-harness/shared/` 优先于 `docs/current/`，`history/` 不覆盖当前事实。
+
+同日二次修订：
+
+- 删除已被当前文档覆盖的历史阶段记录：
+  - `history/运行时快照导出器设计与实施方案.md`
+  - `history/Rust边车启动与健康状态说明（里程碑0阶段）.md`
+  - `history/CPA与数据平面通信矩阵（阶段记录）.md`
+- 将通信矩阵中仍然有效的 Go/Rust 热路径与非热路径边界合并进 `current/当前架构说明.md`。
+- `history/` 当前只保留早期拆分设计作为背景材料。
+
 ## Consequences
 
 优点：
