@@ -1,0 +1,75 @@
+name: docker-embedded-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Docker image tag to publish
+        required: true
+        default: v0.0.1
+      dockerhub_namespace:
+        description: Docker Hub namespace; empty uses DOCKERHUB_USERNAME secret
+        required: false
+        default: ""
+      platforms:
+        description: Build platforms
+        required: true
+        default: linux/amd64,linux/arm64
+      push:
+        description: Push image to Docker Hub
+        required: true
+        type: boolean
+        default: true
+
+env:
+  IMAGE_NAME: ox-cli-proxy-api
+
+jobs:
+  docker_embedded:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Refresh models catalog
+        run: |
+          git fetch --depth 1 https://github.com/router-for-me/models.git main
+          git show FETCH_HEAD:models.json > internal/registry/models/models.json
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        if: inputs.push
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate Build Metadata
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          namespace="${{ inputs.dockerhub_namespace }}"
+          if [ -z "${namespace}" ]; then
+            namespace="${DOCKERHUB_USERNAME}"
+          fi
+          echo "DOCKERHUB_REPO=${namespace}/${IMAGE_NAME}" >> "$GITHUB_ENV"
+          echo "VERSION=${{ inputs.image_tag }}" >> "$GITHUB_ENV"
+          echo "COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
+      - name: Build embedded image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.embedded
+          platforms: ${{ inputs.platforms }}
+          push: ${{ inputs.push }}
+          load: ${{ !inputs.push && inputs.platforms == 'linux/amd64' }}
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            COMMIT=${{ env.COMMIT }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
+          tags: |
+            ${{ env.DOCKERHUB_REPO }}:${{ inputs.image_tag }}
