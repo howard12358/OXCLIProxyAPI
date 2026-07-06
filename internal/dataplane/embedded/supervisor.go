@@ -126,12 +126,16 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	logDir := filepath.Join(stateDir, "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return fmt.Errorf("create embedded data plane log dir %s: %w", logDir, err)
+	}
 
-	stdoutWriter, err := s.cfg.StdoutWriterFactory(filepath.Join(stateDir, "stdout.log"))
+	stdoutWriter, err := s.cfg.StdoutWriterFactory(filepath.Join(logDir, "stdout.log"))
 	if err != nil {
 		return fmt.Errorf("open embedded data plane stdout log: %w", err)
 	}
-	stderrWriter, err := s.cfg.StderrWriterFactory(filepath.Join(stateDir, "stderr.log"))
+	stderrWriter, err := s.cfg.StderrWriterFactory(filepath.Join(logDir, "stderr.log"))
 	if err != nil {
 		_ = stdoutWriter.Close()
 		return fmt.Errorf("open embedded data plane stderr log: %w", err)

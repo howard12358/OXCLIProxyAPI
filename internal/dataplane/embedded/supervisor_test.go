@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -202,5 +203,51 @@ func TestSupervisorLogsLifecycle(t *testing.T) {
 		if !bytes.Contains([]byte(output), []byte(needle)) {
 			t.Fatalf("log output missing %q:\n%s", needle, output)
 		}
+	}
+}
+
+func TestSupervisorWritesStdLogsUnderLogsSubdirectory(t *testing.T) {
+	t.Parallel()
+
+	process := &fakeProcess{pid: 101, waitCh: make(chan error, 1)}
+	stateDir := t.TempDir()
+	var stdoutPath string
+	var stderrPath string
+	supervisor := NewSupervisor(SupervisorConfig{
+		BindAddr:            "127.0.0.1:4111",
+		StateDir:            stateDir,
+		LogLevel:            "info",
+		SnapshotURL:         "http://127.0.0.1:8317/v0/management/runtime-snapshot",
+		SnapshotBearerToken: "test-token",
+		SnapshotPollSeconds: 30,
+		StartupTimeout:      time.Second,
+		ArtifactProvider: fakeArtifactProvider{artifact: &Artifact{
+			FileName: "cliproxy-data-plane",
+			Version:  "v1",
+			Bytes:    []byte("test-binary"),
+		}},
+		Launcher:         fakeLauncher{process: process},
+		ReadinessChecker: func(context.Context, string) error { return nil },
+		StdoutWriterFactory: func(path string) (io.WriteCloser, error) {
+			stdoutPath = path
+			return nopWriteCloser{Writer: io.Discard}, nil
+		},
+		StderrWriterFactory: func(path string) (io.WriteCloser, error) {
+			stderrPath = path
+			return nopWriteCloser{Writer: io.Discard}, nil
+		},
+	})
+
+	if err := supervisor.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	wantStdout := filepath.Join(stateDir, "logs", "stdout.log")
+	wantStderr := filepath.Join(stateDir, "logs", "stderr.log")
+	if stdoutPath != wantStdout {
+		t.Fatalf("stdout path = %q, want %q", stdoutPath, wantStdout)
+	}
+	if stderrPath != wantStderr {
+		t.Fatalf("stderr path = %q, want %q", stderrPath, wantStderr)
 	}
 }

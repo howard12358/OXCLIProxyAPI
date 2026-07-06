@@ -143,6 +143,7 @@
   - Logrus
   - optional file logging
   - request logs and error logs configurable
+  - embedded Rust data-plane supervisors materialize artifacts under the configured state directory and write child-process `stdout.log` / `stderr.log` under `stateDir/logs/`
 - Rust:
   - `tracing` / `tracing-subscriber`
 
