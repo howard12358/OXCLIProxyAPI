@@ -107,13 +107,14 @@ Lint command:
 Build:
 
 ```bash
-docker build -t cli-proxy-api .
+docker build -f Dockerfile.embedded -t rustyllh/ox-cli-proxy-api:latest .
+docker build -f Dockerfile.embedded -t ox-cli-proxy-api:local .
 ```
 
 Embedded Rust data-plane image:
 
 ```bash
-docker build -f Dockerfile.embedded -t cli-proxy-api:embedded .
+docker build -f Dockerfile.embedded -t rustyllh/ox-cli-proxy-api:embedded .
 ```
 
 Manual CI workflow:
@@ -129,6 +130,8 @@ Compose:
 ```bash
 docker compose up -d
 docker compose down
+docker compose logs -f
+./docker-build.sh
 ```
 
 ## Deployment
@@ -139,7 +142,7 @@ docker compose down
 ./cli-proxy-api --config config.yaml
 ```
 
-- Docker / Compose deployment is supported by repo files.
+- Default Docker / Compose deployment pulls `rustyllh/ox-cli-proxy-api:latest`; source-based local builds use `docker-build.sh` / `docker-build.ps1` with `Dockerfile.embedded`.
 - Other deployment scripts or orchestration targets: `待确认`
 
 ## Snapshot / Runtime Inspection

@@ -80,6 +80,34 @@ PackyCodeは当ソフトウェアのユーザーに特別割引を提供して�
 
 CLIProxyAPIガイド：[https://help.router-for.me/](https://help.router-for.me/)
 
+### Docker Compose
+
+`rusty` ブランチの既定デプロイ経路は、embedded Rust data plane です。
+
+1. このリポジトリを clone
+2. `config.example.yaml` を `config.yaml` としてコピー
+3. `config.yaml` を編集
+4. 認証ファイルを `auths/` に配置
+5. 起動:
+
+```bash
+docker compose up -d
+```
+
+よく使う補助コマンド:
+
+```bash
+docker compose logs -f
+docker compose down
+```
+
+補足:
+
+- `docker-compose.yml` は既定で `rustyllh/ox-cli-proxy-api:latest` を pull します
+- Rust data plane のログは `./logs/` に出力されます
+- `/v1/responses` 用に別の外部 Rust プロセスを用意する必要はありません
+- ローカルソースからビルドしたい場合は `./docker-build.sh` を使ってください
+
 ## 管理API
 
 [MANAGEMENT_API.md](https://help.router-for.me/management/api)を参照

@@ -18,6 +18,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Go data-plane usage bridge keeps the same external auth/fallback behavior, but bridge enablement and auth selection are now resolved through a single internal config step; Rust `/v1/responses` likewise centralizes request metadata extraction for router planning and telemetry reuse.
 - External dev-stack usage bridging now aligns Go `MANAGEMENT_PASSWORD` with Rust `--snapshot-bearer-token`, so the preferred RESP subscription path authenticates in `make dev-stack-url`.
 - Dedicated embedded Docker image build support exists through `Dockerfile.embedded` and the manual `docker-embedded-image` workflow, including selectable Rust `release` / `debug` build profiles; the existing tag-driven Docker release remains unchanged.
+- The repository root `docker-compose.yml` now defaults to pulling `rustyllh/ox-cli-proxy-api:latest`, while `docker-build.sh` and `docker-build.ps1` remain the source-build entrypoints that produce a separate local image tag.
 - Embedded Rust data-plane state directories now keep the materialized binary and checksum files at the root while writing `stdout.log` and `stderr.log` under a `logs/` subdirectory for cleaner operations.
 - When `data-plane.embedded.state-dir` is omitted, the embedded Rust data-plane state directory now defaults to the directory containing the running `CLIProxyAPI` executable.
 - Rust `/v1/responses` no longer falls back to local mock responses when no real upstream is available.

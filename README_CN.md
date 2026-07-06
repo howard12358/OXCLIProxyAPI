@@ -81,6 +81,34 @@ PackyCode 为本软件用户提供了特别优惠：使用<a href="https://www.p
 
 CLIProxyAPI 用户手册： [https://help.router-for.me/](https://help.router-for.me/cn/)
 
+### Docker Compose
+
+`rusty` 分支当前默认部署路径已经切到 embedded Rust data plane。
+
+1. 克隆仓库
+2. 将 `config.example.yaml` 复制为 `config.yaml`
+3. 修改 `config.yaml`
+4. 将认证文件放到 `auths/`
+5. 启动：
+
+```bash
+docker compose up -d
+```
+
+常用后续命令：
+
+```bash
+docker compose logs -f
+docker compose down
+```
+
+说明：
+
+- `docker-compose.yml` 默认拉取 `rustyllh/ox-cli-proxy-api:latest`
+- Rust data plane 日志会写入 `./logs/`
+- `/v1/responses` 不需要再单独准备外部 Rust 进程
+- 如果要用本地源码构建镜像，请执行 `./docker-build.sh`
+
 ## 管理 API 文档
 
 请参见 [MANAGEMENT_API_CN.md](https://help.router-for.me/cn/management/api)

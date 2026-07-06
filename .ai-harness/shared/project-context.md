@@ -64,8 +64,8 @@
 
 - Local binary execution:
   - `go run ./cmd/server`
-- Docker image build via `Dockerfile`
-- Container orchestration example via `docker-compose.yml`
+- Default embedded Docker image build for source-based local deployment via `Dockerfile.embedded`
+- Default container orchestration entrypoint via `docker-compose.yml`, which pulls `rustyllh/ox-cli-proxy-api:latest`
 - Rust data plane local dev stack via `Makefile`
 - Production deployment details beyond Docker and local binary are `待确认`
 

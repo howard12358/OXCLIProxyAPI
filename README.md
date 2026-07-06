@@ -80,6 +80,34 @@ PackyCode provides special discounts for our software users: register using <a h
 
 CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
 
+### Docker Compose
+
+The repository default deployment path on the `rusty` branch is now the embedded Rust data plane.
+
+1. Clone this repository
+2. Copy `config.example.yaml` to `config.yaml`
+3. Edit `config.yaml`
+4. Put your auth files under `auths/`
+5. Start the stack:
+
+```bash
+docker compose up -d
+```
+
+Useful follow-up commands:
+
+```bash
+docker compose logs -f
+docker compose down
+```
+
+Notes:
+
+- `docker-compose.yml` pulls `rustyllh/ox-cli-proxy-api:latest` by default
+- Rust data-plane logs are written under `./logs/`
+- no separate external Rust process is required for `/v1/responses`
+- if you want to build from local source instead, run `./docker-build.sh`
+
 ## Management API
 
 see [MANAGEMENT_API.md](https://help.router-for.me/management/api)
