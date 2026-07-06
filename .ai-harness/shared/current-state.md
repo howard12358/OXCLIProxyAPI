@@ -13,6 +13,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Go CPA now bridges Rust data-plane usage queue records back into CPA `internal/redisqueue` with RESP `SUBSCRIBE usage` first and HTTP pop fallback, so external usage consumers can keep connecting to CPA.
 - Go runtime snapshots include auth `usage_source` for Rust usage attribution, and Rust `/v1/responses` usage payloads include downstream API key attribution when present.
 - Go runtime snapshots also export stable auth `auth_index`, and Rust usage payloads now emit that index instead of raw auth IDs while recording TTFT from the first upstream body chunk.
+- Rust `/v1/responses` usage telemetry now preserves downstream `reasoning.effort` / fallback `reasoning_effort` and `service_tier`, and TTFT is fixed at the first observed response byte instead of being overwritten by later chunks.
 - External dev-stack usage bridging now aligns Go `MANAGEMENT_PASSWORD` with Rust `--snapshot-bearer-token`, so the preferred RESP subscription path authenticates in `make dev-stack-url`.
 - Dedicated embedded Docker image build support exists through `Dockerfile.embedded` and the manual `docker-embedded-image` workflow, including selectable Rust `release` / `debug` build profiles; the existing tag-driven Docker release remains unchanged.
 - Rust `/v1/responses` no longer falls back to local mock responses when no real upstream is available.

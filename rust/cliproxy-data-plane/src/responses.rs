@@ -36,6 +36,40 @@ pub struct ResponsesRequest {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl ResponsesRequest {
+    pub(super) fn requested_reasoning_effort(&self) -> String {
+        if let Some(effort) = self
+            .extra
+            .get("reasoning")
+            .and_then(Value::as_object)
+            .and_then(|reasoning| reasoning.get("effort"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return effort.to_string();
+        }
+
+        self.extra
+            .get("reasoning_effort")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    pub(super) fn requested_service_tier(&self) -> String {
+        self.extra
+            .get("service_tier")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string()
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ErrorDetail {
     message: String,

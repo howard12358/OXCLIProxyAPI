@@ -86,11 +86,12 @@
   - auth records include the Go-resolved `usage_source` and stable `auth_index` so Rust usage payloads can preserve CPA identity attribution semantics
 - Rust responses path:
   - request -> request IR -> runtime snapshot + router core -> upstream runtime -> stream-event IR + normalized downstream response -> CPA-shaped usage payload emission
+  - request telemetry also captures downstream `reasoning.effort` / fallback `reasoning_effort` and `service_tier` before provider execution so Rust usage payloads can match Go usage metadata
   - if no real upstream execution path can be constructed, return error immediately instead of synthesizing local mock responses
 - Rust usage-consumption path:
   - `/v1/responses` telemetry -> local CPA-compatible usage queue
   - Rust captures downstream API key headers at the HTTP boundary and emits them as CPA-compatible `api_key`; selected auth `usage_source` is emitted as CPA-compatible `source`; selected auth `auth_index` is emitted as CPA-compatible `auth_index`
-  - streaming TTFT is recorded when the first upstream body chunk arrives, not when a complete repaired SSE frame is finally emitted
+  - TTFT is recorded once at the first observed upstream response byte and must not be overwritten by later chunks or repaired SSE frames
   - HTTP consumers can pop records with `/v0/management/usage-queue?count=N`
   - Redis RESP consumers can use the same TCP listener with `AUTH`, `SUBSCRIBE usage/errors`, and `LPOP/RPOP usage`
 - External CPA usage-consumer path:

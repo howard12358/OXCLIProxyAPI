@@ -56,6 +56,8 @@ impl AppTelemetry {
         snapshot: Option<&RuntimeSnapshot>,
         request_id: Option<String>,
         api_key: Option<String>,
+        reasoning_effort: &str,
+        service_tier: &str,
     ) -> RequestTelemetry {
         let usage_queue = snapshot.map(|value| &value.usage_queue);
         RequestTelemetry {
@@ -68,6 +70,8 @@ impl AppTelemetry {
             state: Arc::new(RequestTelemetryState {
                 request_id: Mutex::new(request_id.unwrap_or_default()),
                 api_key: Mutex::new(api_key.unwrap_or_default()),
+                reasoning_effort: Mutex::new(reasoning_effort.trim().to_string()),
+                service_tier: Mutex::new(normalize_service_tier(service_tier)),
                 ..RequestTelemetryState::default()
             }),
         }
@@ -101,6 +105,8 @@ struct RequestTelemetryState {
     api_key: Mutex<String>,
     request_id: Mutex<String>,
     response_id: Mutex<String>,
+    reasoning_effort: Mutex<String>,
+    service_tier: Mutex<String>,
     response_headers: Mutex<BTreeMap<String, Vec<String>>>,
     input_tokens: AtomicU64,
     output_tokens: AtomicU64,
@@ -140,13 +146,14 @@ impl RequestTelemetry {
     }
 
     pub fn mark_first_byte(&self) {
-        let _ = self.state.first_byte_recorded.compare_exchange(
-            false,
-            true,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
-        if self.state.first_byte_recorded.load(Ordering::SeqCst) {
+        // TTFT 只允许记录第一次观测到的响应偏移；后续 chunk / frame 不得覆盖，
+        // 否则最终值会漂移到接近总耗时，直接污染 keeper 的 speed_tps 计算。
+        if self
+            .state
+            .first_byte_recorded
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
             let elapsed = self.started_at.elapsed().as_millis() as u64;
             self.state.first_byte_ms.store(elapsed, Ordering::SeqCst);
         }
@@ -262,8 +269,8 @@ impl RequestTelemetry {
             auth_type: self.auth_type(),
             api_key: self.api_key(),
             request_id: self.effective_request_id(),
-            reasoning_effort: String::new(),
-            service_tier: DEFAULT_SERVICE_TIER.to_string(),
+            reasoning_effort: self.reasoning_effort(),
+            service_tier: self.service_tier(),
         };
         self.app.emit_usage_payload(payload);
     }
@@ -443,6 +450,24 @@ impl RequestTelemetry {
             .lock()
             .expect("response_headers lock poisoned")
             .clone()
+    }
+
+    fn reasoning_effort(&self) -> String {
+        self.state
+            .reasoning_effort
+            .lock()
+            .expect("reasoning_effort lock poisoned")
+            .clone()
+    }
+
+    fn service_tier(&self) -> String {
+        normalize_service_tier(
+            &self
+                .state
+                .service_tier
+                .lock()
+                .expect("service_tier lock poisoned"),
+        )
     }
 }
 
@@ -627,10 +652,20 @@ fn now_rfc3339() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
+fn normalize_service_tier(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        DEFAULT_SERVICE_TIER.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::UsageObservation;
     use std::collections::BTreeMap;
+    use std::sync::atomic::Ordering;
 
     use cliproxy_common_types::{
         routing::{ExecutionPlan, StickinessSource},
@@ -698,6 +733,8 @@ mod tests {
             Some(&snapshot),
             Some("req-1".into()),
             Some("sk-downstream".into()),
+            "medium",
+            "priority",
         );
         request.bind_execution_plan(&test_plan(), Some(&test_auth()));
 
@@ -714,6 +751,8 @@ mod tests {
         assert_eq!(payload.source, "codex-user@example.com");
         assert_eq!(payload.api_key, "sk-downstream");
         assert_eq!(payload.request_id, "req-1");
+        assert_eq!(payload.reasoning_effort, "medium");
+        assert_eq!(payload.service_tier, "priority");
         assert_eq!(payload.tokens.total_tokens, 30);
         assert_eq!(payload.fail.status_code, 200);
         assert!(!payload.failed);
@@ -761,10 +800,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mark_first_byte_only_records_the_first_observed_offset() {
+        let (app, _rx) = AppTelemetry::new_test(1);
+        let snapshot = test_snapshot(true, "redis");
+        let request = app.new_request("codex-latest", true, Some(&snapshot), None, None, "", "");
+
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        request.mark_first_byte();
+        let first = request.state.first_byte_ms.load(Ordering::SeqCst);
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        request.mark_first_byte();
+        let second = request.state.first_byte_ms.load(Ordering::SeqCst);
+
+        assert_eq!(second, first);
+    }
+
+    #[tokio::test]
     async fn does_not_emit_payload_when_usage_queue_backend_is_not_redis() {
         let (app, mut rx) = AppTelemetry::new_test(4);
         let snapshot = test_snapshot(true, "log");
-        let request = app.new_request("codex-latest", false, Some(&snapshot), None, None);
+        let request = app.new_request("codex-latest", false, Some(&snapshot), None, None, "", "");
         request.bind_execution_plan(&test_plan(), Some(&test_auth()));
 
         observe_success(&request);

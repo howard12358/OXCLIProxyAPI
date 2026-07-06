@@ -830,6 +830,72 @@ async fn responses_route_usage_payload_includes_source_and_downstream_api_key() 
 }
 
 #[tokio::test]
+async fn responses_route_usage_payload_includes_reasoning_effort_and_service_tier() {
+    let upstream_url = spawn_openai_upstream().await;
+    let runtime = test_runtime_with_auths(
+        true,
+        RoutingStrategy::FillFirst,
+        vec![codex_oauth_auth(
+            "auth-codex-a",
+            100,
+            "codex-token-a",
+            "acct_a",
+            Some(&upstream_url),
+        )],
+    );
+    let mut snapshot = runtime
+        .current_snapshot()
+        .expect("snapshot")
+        .as_ref()
+        .clone();
+    snapshot.usage_queue = UsageQueueConfig {
+        enabled: true,
+        backend: "redis".to_string(),
+    };
+    runtime.apply_snapshot(snapshot);
+    let usage_queue = UsageQueue::new();
+    let app = router_with_snapshot_client_and_usage_queue(
+        runtime,
+        test_upstream(),
+        None,
+        usage_queue.clone(),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model":"codex-latest",
+                        "stream":true,
+                        "input":"hello",
+                        "reasoning":{"effort":"high"},
+                        "service_tier":"priority"
+                    })
+                    .to_string(),
+                ))
+                .expect("build request"),
+        )
+        .await
+        .expect("call app");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let payloads = usage_queue.pop_oldest_json(1);
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(payloads[0]["reasoning_effort"], "high");
+    assert_eq!(payloads[0]["service_tier"], "priority");
+}
+
+#[tokio::test]
 async fn responses_route_aggregates_codex_stream_for_non_stream_clients() {
     let upstream_url = spawn_openai_upstream().await;
     let app = router(

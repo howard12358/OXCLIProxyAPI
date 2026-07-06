@@ -33,6 +33,8 @@ pub async fn handle_responses(
         runtime.current_snapshot().as_deref(),
         request_id,
         api_key,
+        &request.requested_reasoning_effort(),
+        &request.requested_service_tier(),
     );
 
     if !runtime.responses_route_enabled() {
