@@ -690,6 +690,80 @@ async fn responses_route_normalizes_codex_payload_for_upstream() {
 }
 
 #[tokio::test]
+async fn responses_route_preserves_codex_native_input_and_extra_fields() {
+    let upstream_url = spawn_openai_upstream().await;
+    let app = router(
+        test_runtime_with_auths(
+            true,
+            RoutingStrategy::FillFirst,
+            vec![codex_oauth_auth(
+                "auth-codex-a",
+                100,
+                "codex-token-a",
+                "acct_a",
+                Some(&upstream_url),
+            )],
+        ),
+        test_upstream(),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model":"codex-latest",
+                        "stream":true,
+                        "input":[{
+                            "type":"message",
+                            "role":"user",
+                            "content":[{"type":"input_text","text":"hello from native input"}]
+                        }],
+                        "tools":[{"type":"function","name":"shell"}],
+                        "include":["reasoning.encrypted_content"],
+                        "text":{"verbosity":"low"},
+                        "metadata":{"client":"codex-test"}
+                    })
+                    .to_string(),
+                ))
+                .expect("build request"),
+        )
+        .await
+        .expect("call app");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let text = String::from_utf8(body.to_vec()).expect("valid utf8");
+    let completed_line = text
+        .lines()
+        .find(|line| line.starts_with("data: {\"type\":\"response.completed\""))
+        .expect("completed event");
+    let payload: Value = serde_json::from_str(
+        completed_line
+            .strip_prefix("data: ")
+            .expect("completed payload prefix"),
+    )
+    .expect("parse completed payload");
+    let received = &payload["response"]["received_payload"];
+    assert_eq!(
+        received["input"][0]["content"][0]["text"],
+        "hello from native input"
+    );
+    assert_eq!(received["tools"][0]["name"], "shell");
+    assert_eq!(received["include"][0], "reasoning.encrypted_content");
+    assert_eq!(received["text"]["verbosity"], "low");
+    assert!(received.get("metadata").is_none());
+}
+
+#[tokio::test]
 async fn responses_route_aggregates_codex_stream_for_non_stream_clients() {
     let upstream_url = spawn_openai_upstream().await;
     let app = router(

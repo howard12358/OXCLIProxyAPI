@@ -38,6 +38,7 @@ This document records durable repository-level state. It is not a per-session ta
   - Go-side bridge auth selection that uses the embedded/local management password first and falls back to `MANAGEMENT_PASSWORD` for external data-plane dev stacks
   - pre-commit auth retry classification for `/v1/responses`
   - upstream request/response redaction helpers for logging
+  - Codex native Responses array input and extra top-level request fields are preserved through Rust `/v1/responses` upstream normalization
   - snapshot notify endpoint
   - runtime snapshot observation endpoint
   - graceful SIGTERM / Ctrl-C shutdown logging for the Rust data-plane listener

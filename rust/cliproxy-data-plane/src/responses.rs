@@ -7,6 +7,7 @@ use axum::{
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 mod handler;
 mod protocol;
@@ -31,6 +32,8 @@ pub struct ResponsesRequest {
     pub metadata: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store: Option<bool>,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -233,6 +236,7 @@ mod tests {
             instructions: None,
             metadata: Some(json!({"client":"test"})),
             store: None,
+            extra: BTreeMap::new(),
         };
 
         let meta = extract_metadata(&request).expect("extract metadata");
@@ -250,6 +254,7 @@ mod tests {
             instructions: None,
             metadata: None,
             store: None,
+            extra: BTreeMap::new(),
         };
         let plan = ExecutionPlan {
             provider: cliproxy_common_types::upstream::ProviderKind::Codex,
@@ -290,6 +295,7 @@ mod tests {
             instructions: None,
             metadata: Some(json!({"client":"test"})),
             store: None,
+            extra: BTreeMap::new(),
         };
         let plan = ExecutionPlan {
             provider: cliproxy_common_types::upstream::ProviderKind::OpenAi,
@@ -315,6 +321,7 @@ mod tests {
             instructions: None,
             metadata: Some(json!({"session_id":"sess_123"})),
             store: None,
+            extra: BTreeMap::new(),
         };
         let plan = ExecutionPlan {
             provider: cliproxy_common_types::upstream::ProviderKind::Codex,
@@ -352,6 +359,53 @@ mod tests {
     }
 
     #[test]
+    fn request_ir_preserves_codex_native_input_and_extra_fields() {
+        let request = ResponsesRequest {
+            model: "codex-latest".to_string(),
+            stream: true,
+            input: Some(json!([
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "hello from codex cli"
+                        }
+                    ]
+                }
+            ])),
+            instructions: Some("system".to_string()),
+            metadata: Some(json!({"client":"codex-test"})),
+            store: Some(true),
+            extra: std::collections::BTreeMap::from([
+                (
+                    "tools".to_string(),
+                    json!([{"type":"function","name":"shell"}]),
+                ),
+                (
+                    "include".to_string(),
+                    json!(["reasoning.encrypted_content"]),
+                ),
+            ]),
+        };
+        let plan = ExecutionPlan {
+            provider: cliproxy_common_types::upstream::ProviderKind::Codex,
+            model: "gpt-5.5".to_string(),
+            auth_id: "auth-1".to_string(),
+            retry_candidates: vec![],
+            stickiness_source: StickinessSource::Strategy,
+        };
+
+        let ir = protocol::ResponsesRequestIr::from_downstream_request(&request);
+        let emitted = ir.emit_upstream_request(&plan);
+
+        assert_eq!(emitted.input, request.input);
+        assert_eq!(emitted.extra["tools"][0]["name"], "shell");
+        assert_eq!(emitted.extra["include"][0], "reasoning.encrypted_content");
+    }
+
+    #[test]
     fn request_ir_preserves_non_codex_request_shape() {
         let request = ResponsesRequest {
             model: "gpt-5".to_string(),
@@ -362,6 +416,7 @@ mod tests {
             instructions: Some("system".to_string()),
             metadata: Some(json!({"client":"test"})),
             store: Some(true),
+            extra: BTreeMap::new(),
         };
         let plan = ExecutionPlan {
             provider: cliproxy_common_types::upstream::ProviderKind::OpenAi,

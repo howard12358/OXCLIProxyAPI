@@ -2,6 +2,7 @@ use anyhow::Context;
 use cliproxy_common_types::routing::ExecutionPlan;
 use cliproxy_common_types::upstream::ProviderKind;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 use super::{DEFAULT_CODEX_INSTRUCTIONS, ResponsesRequest, sse::sse_data_payload};
 
@@ -16,6 +17,7 @@ pub(super) struct ResponsesRequestIr {
     instructions: Option<String>,
     metadata: Option<Value>,
     store: Option<bool>,
+    extra: BTreeMap<String, Value>,
 }
 
 impl ResponsesRequestIr {
@@ -28,6 +30,7 @@ impl ResponsesRequestIr {
             instructions: request.instructions.clone(),
             metadata: request.metadata.clone(),
             store: request.store,
+            extra: request.extra.clone(),
         }
     }
 
@@ -42,6 +45,7 @@ impl ResponsesRequestIr {
             instructions: self.instructions.clone(),
             metadata: self.metadata.clone(),
             store: self.store,
+            extra: self.extra.clone(),
         };
 
         if execution_plan.provider != ProviderKind::Codex {
@@ -61,18 +65,25 @@ impl ResponsesRequestIr {
             request.instructions = Some(DEFAULT_CODEX_INSTRUCTIONS.to_string());
         }
 
-        if let Some(Value::String(text)) = request.input.take() {
-            request.input = Some(json!([
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": text
-                        }
-                    ]
-                }
-            ]));
+        // 兼容性约束：Codex CLI 新版本会直接发送 Responses 原生数组 input。
+        // 只有旧式纯文本 input 需要 lift 成 message array，其他形态必须原样保留。
+        match request.input.take() {
+            Some(Value::String(text)) => {
+                request.input = Some(json!([
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": text
+                            }
+                        ]
+                    }
+                ]));
+            }
+            other => {
+                request.input = other;
+            }
         }
 
         request
