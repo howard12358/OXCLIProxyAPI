@@ -37,36 +37,8 @@ pub struct ResponsesRequest {
 }
 
 impl ResponsesRequest {
-    pub(super) fn requested_reasoning_effort(&self) -> String {
-        if let Some(effort) = self
-            .extra
-            .get("reasoning")
-            .and_then(Value::as_object)
-            .and_then(|reasoning| reasoning.get("effort"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return effort.to_string();
-        }
-
-        self.extra
-            .get("reasoning_effort")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or_default()
-            .to_string()
-    }
-
-    pub(super) fn requested_service_tier(&self) -> String {
-        self.extra
-            .get("service_tier")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or_default()
-            .to_string()
+    pub(super) fn metadata(&self) -> anyhow::Result<ResponsesRequestMetadata> {
+        ResponsesRequestMetadata::from_request(self)
     }
 }
 
@@ -83,43 +55,95 @@ struct ErrorResponse {
     error: ErrorDetail,
 }
 
-/// 从下游请求中抽取出来的轻量元信息，用于测试辅助、日志和粗粒度 token 估算。
-#[cfg(test)]
-#[derive(Debug, Clone)]
-pub(super) struct RequestMetadata {
+/// 从下游 `/v1/responses` 请求抽取出来的统一元信息。
+///
+/// 这里承载后续路由规划、telemetry 和测试辅助都会复用的字段，
+/// 避免 handler、router plan 和 usage 侧各自重复从原始 request 里拆字段。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ResponsesRequestMetadata {
     model: String,
+    session_id: Option<String>,
+    pinned_auth_id: Option<String>,
+    reasoning_effort: String,
+    service_tier: String,
+    #[cfg(test)]
     prompt_preview: String,
+    #[cfg(test)]
     metadata_keys: usize,
 }
 
-#[cfg(test)]
-fn extract_metadata(request: &ResponsesRequest) -> anyhow::Result<RequestMetadata> {
-    let model = request.model.trim().to_string();
-    if model.is_empty() {
-        anyhow::bail!("model is required");
+impl ResponsesRequestMetadata {
+    fn from_request(request: &ResponsesRequest) -> anyhow::Result<Self> {
+        let model = request.model.trim().to_string();
+        if model.is_empty() {
+            anyhow::bail!("model is required");
+        }
+
+        Ok(Self {
+            model,
+            session_id: cliproxy_router_core::extract_codex_session_id(request.metadata.as_ref()),
+            pinned_auth_id: cliproxy_router_core::extract_pinned_auth_id(request.metadata.as_ref()),
+            reasoning_effort: requested_reasoning_effort(&request.extra),
+            service_tier: requested_service_tier(&request.extra),
+            #[cfg(test)]
+            prompt_preview: request_prompt_preview(request),
+            #[cfg(test)]
+            metadata_keys: request_metadata_keys(request),
+        })
+    }
+}
+
+fn requested_reasoning_effort(extra: &BTreeMap<String, Value>) -> String {
+    if let Some(effort) = extra
+        .get("reasoning")
+        .and_then(Value::as_object)
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return effort.to_string();
     }
 
-    let prompt_preview = request
+    extra
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn requested_service_tier(extra: &BTreeMap<String, Value>) -> String {
+    extra
+        .get("service_tier")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[cfg(test)]
+fn request_prompt_preview(request: &ResponsesRequest) -> String {
+    request
         .instructions
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| truncate_preview(value, 48))
         .or_else(|| extract_prompt_preview(request.input.as_ref()))
-        .unwrap_or_else(|| "empty-input".to_string());
+        .unwrap_or_else(|| "empty-input".to_string())
+}
 
-    let metadata_keys = request
+#[cfg(test)]
+fn request_metadata_keys(request: &ResponsesRequest) -> usize {
+    request
         .metadata
         .as_ref()
         .and_then(|value| value.as_object())
         .map(|object| object.len())
-        .unwrap_or(0);
-
-    Ok(RequestMetadata {
-        model,
-        prompt_preview,
-        metadata_keys,
-    })
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -273,7 +297,7 @@ mod tests {
             extra: BTreeMap::new(),
         };
 
-        let meta = extract_metadata(&request).expect("extract metadata");
+        let meta = request.metadata().expect("extract metadata");
         assert_eq!(meta.model, "gpt-5");
         assert!(meta.prompt_preview.contains("hello world"));
         assert_eq!(meta.metadata_keys, 1);
@@ -464,6 +488,33 @@ mod tests {
         let emitted = ir.emit_upstream_request(&plan);
 
         assert_eq!(emitted, request);
+    }
+
+    #[test]
+    fn request_metadata_centralizes_router_and_telemetry_fields() {
+        let request = ResponsesRequest {
+            model: "codex-latest".to_string(),
+            stream: true,
+            input: Some(json!("hello")),
+            instructions: Some("system".to_string()),
+            metadata: Some(json!({
+                "session_id":"sess_123",
+                "pinned_auth_id":"auth-pinned-1"
+            })),
+            store: Some(true),
+            extra: BTreeMap::from([
+                ("service_tier".to_string(), json!("priority")),
+                ("reasoning".to_string(), json!({"effort":"high"})),
+            ]),
+        };
+
+        let meta = request.metadata().expect("extract metadata");
+
+        assert_eq!(meta.model, "codex-latest");
+        assert_eq!(meta.session_id.as_deref(), Some("codex:sess_123"));
+        assert_eq!(meta.pinned_auth_id.as_deref(), Some("auth-pinned-1"));
+        assert_eq!(meta.reasoning_effort, "high");
+        assert_eq!(meta.service_tier, "priority");
     }
 
     #[test]

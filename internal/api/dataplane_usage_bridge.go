@@ -24,21 +24,26 @@ const (
 	dataPlaneUsageQueueRetryDelay = time.Second
 )
 
+type dataPlaneUsageBridgeConfig struct {
+	enabled      bool
+	baseURL      string
+	authPassword string
+}
+
 func (s *Server) reconcileDataPlaneUsageBridge(cfg *config.Config) {
 	if s == nil {
 		return
 	}
-	baseURL := dataPlaneUsageBridgeBaseURL(cfg)
-	if baseURL == "" {
+	bridgeCfg := resolveDataPlaneUsageBridgeConfig(cfg, s.localPassword)
+	if !bridgeCfg.enabled {
 		s.stopDataPlaneUsageBridge()
 		return
 	}
-	authPassword := dataPlaneUsageBridgeAuthPassword(s.localPassword)
 
 	s.dataPlaneUsageBridgeMu.Lock()
 	if s.dataPlaneUsageBridgeCancel != nil &&
-		s.dataPlaneUsageBridgeBaseURL == baseURL &&
-		s.dataPlaneUsageBridgeAuth == authPassword {
+		s.dataPlaneUsageBridgeBaseURL == bridgeCfg.baseURL &&
+		s.dataPlaneUsageBridgeAuth == bridgeCfg.authPassword {
 		s.dataPlaneUsageBridgeMu.Unlock()
 		return
 	}
@@ -50,11 +55,11 @@ func (s *Server) reconcileDataPlaneUsageBridge(cfg *config.Config) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.dataPlaneUsageBridgeCancel = cancel
-	s.dataPlaneUsageBridgeBaseURL = baseURL
-	s.dataPlaneUsageBridgeAuth = authPassword
+	s.dataPlaneUsageBridgeBaseURL = bridgeCfg.baseURL
+	s.dataPlaneUsageBridgeAuth = bridgeCfg.authPassword
 	s.dataPlaneUsageBridgeMu.Unlock()
 
-	go runDataPlaneUsageBridge(ctx, baseURL, authPassword)
+	go runDataPlaneUsageBridge(ctx, bridgeCfg.baseURL, bridgeCfg.authPassword)
 }
 
 func (s *Server) stopDataPlaneUsageBridge() {
@@ -91,6 +96,18 @@ func dataPlaneUsageBridgeAuthPassword(localPassword string) string {
 		return password
 	}
 	return strings.TrimSpace(os.Getenv("MANAGEMENT_PASSWORD"))
+}
+
+func resolveDataPlaneUsageBridgeConfig(cfg *config.Config, localPassword string) dataPlaneUsageBridgeConfig {
+	baseURL := dataPlaneUsageBridgeBaseURL(cfg)
+	if baseURL == "" {
+		return dataPlaneUsageBridgeConfig{}
+	}
+	return dataPlaneUsageBridgeConfig{
+		enabled:      true,
+		baseURL:      baseURL,
+		authPassword: dataPlaneUsageBridgeAuthPassword(localPassword),
+	}
 }
 
 func runDataPlaneUsageBridge(ctx context.Context, baseURL string, authPassword string) {

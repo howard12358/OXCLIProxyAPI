@@ -170,6 +170,37 @@ func TestDataPlaneUsageBridgeAuthPasswordFallsBackToManagementPasswordEnv(t *tes
 	}
 }
 
+func TestResolveDataPlaneUsageBridgeConfigUsesSameEnablementAndAuthSemantics(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", " env-token ")
+
+	cfg := &config.Config{
+		UsageStatisticsEnabled: true,
+		DataPlane:              config.DataPlaneConfig{ResponsesBaseURL: "http://127.0.0.1:4100"},
+		RemoteManagement:       config.RemoteManagement{SecretKey: "management-key"},
+	}
+	bridgeCfg := resolveDataPlaneUsageBridgeConfig(cfg, " local-token ")
+	if !bridgeCfg.enabled {
+		t.Fatal("bridge config enabled = false, want true")
+	}
+	if bridgeCfg.baseURL != "http://127.0.0.1:4100" {
+		t.Fatalf("bridge baseURL = %q, want data-plane URL", bridgeCfg.baseURL)
+	}
+	if bridgeCfg.authPassword != "local-token" {
+		t.Fatalf("bridge auth password = %q, want local-token", bridgeCfg.authPassword)
+	}
+
+	bridgeCfg = resolveDataPlaneUsageBridgeConfig(cfg, "")
+	if bridgeCfg.authPassword != "env-token" {
+		t.Fatalf("bridge auth password = %q, want env-token", bridgeCfg.authPassword)
+	}
+
+	cfg.RemoteManagement.SecretKey = ""
+	bridgeCfg = resolveDataPlaneUsageBridgeConfig(cfg, "")
+	if bridgeCfg.enabled {
+		t.Fatal("bridge config enabled = true, want false without management secret or home mode")
+	}
+}
+
 func TestReadBridgeRESPSimpleStringReturnsErrorFrameMessage(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("-ERR invalid password\r\n"))
 

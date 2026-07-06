@@ -16,9 +16,9 @@ use tracing::info;
 use crate::telemetry::{RequestTelemetry, StreamCompletionGuard};
 
 use super::{
-    MockCompletedResponse, MockSseEvent, RequestMetadata, ResponsesRequest, build_output_text,
-    estimate_input_tokens, estimate_output_tokens, estimate_output_tokens_from_text,
-    mock_response_id,
+    MockCompletedResponse, MockSseEvent, ResponsesRequest, ResponsesRequestMetadata,
+    build_output_text, estimate_input_tokens, estimate_output_tokens,
+    estimate_output_tokens_from_text, mock_response_id,
 };
 
 /// 本地 mock 的非流式 `/v1/responses` 回包。
@@ -26,7 +26,7 @@ use super::{
 /// 当真实 upstream 不可用时，这条路径提供最小可运行闭环，并继续喂 telemetry。
 pub(super) fn non_streaming_response(
     _request: ResponsesRequest,
-    request_meta: RequestMetadata,
+    request_meta: ResponsesRequestMetadata,
     execution_plan: &ExecutionPlan,
     telemetry: RequestTelemetry,
 ) -> Result<Json<MockCompletedResponse>> {
@@ -67,7 +67,7 @@ pub(super) fn non_streaming_response(
 /// 本地 mock 的流式 `/v1/responses` 回包。
 pub(super) async fn streaming_response(
     request: ResponsesRequest,
-    request_meta: RequestMetadata,
+    request_meta: ResponsesRequestMetadata,
     execution_plan: &ExecutionPlan,
     telemetry: RequestTelemetry,
 ) -> Result<Response<Body>> {
@@ -143,7 +143,7 @@ fn frame_stream(
 /// 生成 mock upstream 的最小事件序列，覆盖 created / delta / usage / completed。
 fn mock_upstream_events(
     request: &ResponsesRequest,
-    request_meta: &RequestMetadata,
+    request_meta: &ResponsesRequestMetadata,
     execution_plan: &ExecutionPlan,
 ) -> Result<Vec<MockSseEvent>> {
     if execution_plan.model.trim().is_empty() {

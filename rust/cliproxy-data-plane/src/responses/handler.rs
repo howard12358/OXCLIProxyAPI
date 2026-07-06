@@ -3,16 +3,14 @@ use cliproxy_common_types::{
     routing::ExecutionPlan,
     snapshot::{AuthRecord, RuntimeSnapshot},
 };
-use cliproxy_router_core::{
-    PlanRequest, RouterCore, extract_codex_session_id, extract_pinned_auth_id,
-};
+use cliproxy_router_core::{PlanRequest, RouterCore};
 use cliproxy_upstream_runtime::UpstreamRuntime;
 
 use crate::runtime::RuntimeStateHandle;
 use crate::telemetry::AppTelemetry;
 
 use super::upstream::{execute_real_upstream, log_upstream_failure};
-use super::{ResponsesRequest, error_response};
+use super::{ResponsesRequest, ResponsesRequestMetadata, error_response};
 
 /// Rust 数据平面的 `/v1/responses` 主入口。
 ///
@@ -27,14 +25,24 @@ pub async fn handle_responses(
     request_id: Option<String>,
     api_key: Option<String>,
 ) -> Response<Body> {
+    let request_meta = match request.metadata() {
+        Ok(meta) => meta,
+        Err(err) => {
+            return error_response(
+                axum::http::StatusCode::BAD_REQUEST,
+                &err.to_string(),
+                "invalid_request",
+            );
+        }
+    };
     let request_telemetry = telemetry.new_request(
-        &request.model,
+        &request_meta.model,
         request.stream,
         runtime.current_snapshot().as_deref(),
         request_id,
         api_key,
-        &request.requested_reasoning_effort(),
-        &request.requested_service_tier(),
+        &request_meta.reasoning_effort,
+        &request_meta.service_tier,
     );
 
     if !runtime.responses_route_enabled() {
@@ -46,17 +54,18 @@ pub async fn handle_responses(
         );
     }
 
-    let (snapshot, execution_plan) = match build_execution_plan(&runtime, &router_core, &request) {
-        Ok(resolved) => resolved,
-        Err(err) => {
-            request_telemetry.finish_error(503, &err.to_string());
-            return error_response(
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                &err.to_string(),
-                "routing_unavailable",
-            );
-        }
-    };
+    let (snapshot, execution_plan) =
+        match build_execution_plan(&runtime, &router_core, &request_meta) {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                request_telemetry.finish_error(503, &err.to_string());
+                return error_response(
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    &err.to_string(),
+                    "routing_unavailable",
+                );
+            }
+        };
     let selected_auth = auth_for_plan(snapshot.as_ref(), &execution_plan);
     request_telemetry.bind_execution_plan(&execution_plan, selected_auth);
 
@@ -98,7 +107,7 @@ pub async fn handle_responses(
 fn build_execution_plan(
     runtime: &RuntimeStateHandle,
     router_core: &RouterCore,
-    request: &ResponsesRequest,
+    request_meta: &ResponsesRequestMetadata,
 ) -> anyhow::Result<(std::sync::Arc<RuntimeSnapshot>, ExecutionPlan)> {
     let snapshot = runtime
         .current_snapshot()
@@ -106,9 +115,9 @@ fn build_execution_plan(
     let plan = router_core.plan(
         snapshot.as_ref(),
         PlanRequest {
-            requested_model: request.model.clone(),
-            session_id: extract_codex_session_id(request.metadata.as_ref()),
-            pinned_auth_id: extract_pinned_auth_id(request.metadata.as_ref()),
+            requested_model: request_meta.model.clone(),
+            session_id: request_meta.session_id.clone(),
+            pinned_auth_id: request_meta.pinned_auth_id.clone(),
         },
     )?;
     Ok((snapshot, plan))

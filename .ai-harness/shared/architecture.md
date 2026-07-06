@@ -49,7 +49,7 @@
 - `internal/dataplane/notifier/`
   - Notify Rust data plane when effective snapshot version changes
 - `internal/api/dataplane_usage_bridge.go`
-  - Subscribe to Rust data-plane usage queue and re-enqueue records into CPA `internal/redisqueue` so external consumers can keep reading from CPA
+  - Resolve bridge enablement/auth config, subscribe to Rust data-plane usage queue, and re-enqueue records into CPA `internal/redisqueue` so external consumers can keep reading from CPA
 - `internal/watcher/`
   - React to config and auth file changes
 - `sdk/cliproxy/`
@@ -65,7 +65,7 @@
 - `rust/cliproxy-data-plane/src/telemetry.rs`
   - Request lifecycle telemetry, extracted usage observation helper, and CPA-shaped usage payload emission into the local usage queue
 - `rust/cliproxy-data-plane/src/responses.rs`
-  - Rust `/v1/responses` parent module with shared request/response types, helpers, and unit tests
+  - Rust `/v1/responses` parent module with shared request/response types, centralized request metadata extraction, helpers, and unit tests
 - `rust/cliproxy-data-plane/src/responses/`
   - Rust `/v1/responses` child modules split by responsibility:
   - `handler.rs` route handler orchestration and plan/bootstrap flow
@@ -85,8 +85,8 @@
   - Go config/auth state -> runtime snapshot -> Rust pull / apply
   - auth records include the Go-resolved `usage_source` and stable `auth_index` so Rust usage payloads can preserve CPA identity attribution semantics
 - Rust responses path:
-  - request -> request IR -> runtime snapshot + router core -> upstream runtime -> stream-event IR + normalized downstream response -> CPA-shaped usage payload emission
-  - request telemetry also captures downstream `reasoning.effort` / fallback `reasoning_effort` and `service_tier` before provider execution so Rust usage payloads can match Go usage metadata
+  - request -> centralized request metadata extraction -> request IR -> runtime snapshot + router core -> upstream runtime -> stream-event IR + normalized downstream response -> CPA-shaped usage payload emission
+  - request metadata now owns shared extraction of `session_id`, `pinned_auth_id`, `reasoning.effort` / fallback `reasoning_effort`, and `service_tier` before routing and telemetry
   - if no real upstream execution path can be constructed, return error immediately instead of synthesizing local mock responses
 - Rust usage-consumption path:
   - `/v1/responses` telemetry -> local CPA-compatible usage queue
@@ -97,7 +97,7 @@
 - External CPA usage-consumer path:
   - `cpa-usage-keeper` and other external consumers can continue connecting to CPA
   - when Go routes `/v1/responses` to Rust and usage statistics are enabled, CPA subscribes to Rust `usage` over Redis RESP and writes those records back into CPA `internal/redisqueue`
-  - bridge RESP auth uses the embedded/local management password when available, otherwise the plaintext `MANAGEMENT_PASSWORD` environment variable used by external dev-stack snapshot auth
+  - bridge enablement and auth are resolved once up front; RESP auth still uses the embedded/local management password when available, otherwise the plaintext `MANAGEMENT_PASSWORD` environment variable used by external dev-stack snapshot auth
   - if RESP subscription is unavailable or disconnects, CPA falls back to Rust `/v0/management/usage-queue?count=64` before retrying the RESP subscription
 
 ## Main Control Flow
