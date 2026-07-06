@@ -82,6 +82,12 @@ func TestBuildRuntimeSnapshotExportsCodexOAuthAuth(t *testing.T) {
 	if auth.ID != "auth-codex-1" {
 		t.Fatalf("auth.id = %q, want auth-codex-1", auth.ID)
 	}
+	if auth.AuthIndex == "" {
+		t.Fatal("auth.auth_index = empty, want stable runtime auth index")
+	}
+	if auth.AuthIndex == auth.ID {
+		t.Fatalf("auth.auth_index = %q, unexpectedly equals auth.id", auth.AuthIndex)
+	}
 	if auth.Priority != 120 {
 		t.Fatalf("auth.priority = %d, want 120", auth.Priority)
 	}

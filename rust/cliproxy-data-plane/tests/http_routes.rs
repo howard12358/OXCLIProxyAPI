@@ -825,6 +825,7 @@ async fn responses_route_usage_payload_includes_source_and_downstream_api_key() 
     let payloads = usage_queue.pop_oldest_json(1);
     assert_eq!(payloads.len(), 1);
     assert_eq!(payloads[0]["source"], "auth-codex-a@example.test");
+    assert_eq!(payloads[0]["auth_index"], "auth-codex-a-index");
     assert_eq!(payloads[0]["api_key"], "sk-downstream");
 }
 

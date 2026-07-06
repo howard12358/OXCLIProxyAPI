@@ -81,6 +81,9 @@ pub(super) async fn execute_real_upstream(
                 let _provider = response.provider;
                 let _events = response.events;
                 telemetry.observe_response_headers(&response.head.headers);
+                // 对齐 Go usage reporter：收到上游首个 body chunk 就记首字延迟，
+                // 不等待完整 SSE frame 组装完成，避免 chunk 边界把 TTFT 抬到接近总耗时。
+                telemetry.mark_first_byte();
                 let body = aggregate_streaming_response_body(
                     response.first_chunk,
                     response.stream,
@@ -100,8 +103,8 @@ pub(super) async fn execute_real_upstream(
             let body = Body::from_stream(stream! {
                 let mut completion_guard = StreamCompletionGuard::new(telemetry.clone());
                 let mut framer = ResponsesSseFramer::default();
+                telemetry.mark_first_byte();
                 for frame in framer.push_chunk(first_chunk) {
-                    telemetry.mark_first_byte();
                     telemetry.observe_sse_frame(&frame);
                     yield Ok::<Bytes, Infallible>(frame);
                 }
@@ -109,8 +112,8 @@ pub(super) async fn execute_real_upstream(
                 while let Some(item) = tail.next().await {
                     match item {
                         Ok(bytes) => {
+                            telemetry.mark_first_byte();
                             for frame in framer.push_chunk(bytes) {
-                                telemetry.mark_first_byte();
                                 telemetry.observe_sse_frame(&frame);
                                 yield Ok(frame);
                             }
@@ -121,7 +124,6 @@ pub(super) async fn execute_real_upstream(
                                 serde_json::to_string(&err.to_string()).unwrap_or_else(|_| "\"upstream stream error\"".to_string())
                             ));
                             for pending in framer.finish() {
-                                telemetry.mark_first_byte();
                                 telemetry.observe_sse_frame(&pending);
                                 yield Ok(pending);
                             }
@@ -133,7 +135,6 @@ pub(super) async fn execute_real_upstream(
                     }
                 }
                 for frame in framer.finish() {
-                    telemetry.mark_first_byte();
                     telemetry.observe_sse_frame(&frame);
                     yield Ok(frame);
                 }

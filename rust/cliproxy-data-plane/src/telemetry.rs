@@ -95,7 +95,7 @@ impl AppTelemetry {
 struct RequestTelemetryState {
     provider: Mutex<String>,
     resolved_model: Mutex<String>,
-    auth_id: Mutex<String>,
+    auth_index: Mutex<String>,
     auth_type: Mutex<String>,
     usage_source: Mutex<String>,
     api_key: Mutex<String>,
@@ -129,8 +129,11 @@ impl RequestTelemetry {
     pub fn bind_execution_plan(&self, plan: &ExecutionPlan, selected_auth: Option<&AuthRecord>) {
         self.set_provider(provider_name(plan.provider));
         self.set_resolved_model(plan.model.clone());
-        self.set_auth_id(plan.auth_id.clone());
+        self.set_auth_index(plan.auth_id.clone());
         if let Some(auth) = selected_auth {
+            if !auth.auth_index.trim().is_empty() {
+                self.set_auth_index(auth.auth_index.clone());
+            }
             self.set_auth_type(auth.auth_kind.clone());
             self.set_usage_source(auth.usage_source.clone());
         }
@@ -231,7 +234,7 @@ impl RequestTelemetry {
             latency_ms: self.started_at.elapsed().as_millis() as u64,
             ttft_ms: self.state.first_byte_ms.load(Ordering::SeqCst),
             source: self.usage_source(),
-            auth_index: self.auth_id(),
+            auth_index: self.auth_index(),
             tokens: UsageQueueTokens {
                 input_tokens: self.state.input_tokens.load(Ordering::SeqCst),
                 output_tokens: self.state.output_tokens.load(Ordering::SeqCst),
@@ -313,8 +316,12 @@ impl RequestTelemetry {
             .expect("resolved_model lock poisoned") = value;
     }
 
-    fn set_auth_id(&self, value: String) {
-        *self.state.auth_id.lock().expect("auth_id lock poisoned") = value;
+    fn set_auth_index(&self, value: String) {
+        *self
+            .state
+            .auth_index
+            .lock()
+            .expect("auth_index lock poisoned") = value;
     }
 
     fn set_auth_type(&self, value: String) {
@@ -369,11 +376,11 @@ impl RequestTelemetry {
         }
     }
 
-    fn auth_id(&self) -> String {
+    fn auth_index(&self) -> String {
         self.state
-            .auth_id
+            .auth_index
             .lock()
-            .expect("auth_id lock poisoned")
+            .expect("auth_index lock poisoned")
             .clone()
     }
 
@@ -648,7 +655,7 @@ mod tests {
         ExecutionPlan {
             provider: ProviderKind::Codex,
             model: "gpt-5-codex".to_string(),
-            auth_id: "auth-codex-1".to_string(),
+            auth_id: "auth-codex-runtime-id".to_string(),
             retry_candidates: Vec::new(),
             stickiness_source: StickinessSource::Strategy,
         }
@@ -656,7 +663,8 @@ mod tests {
 
     fn test_auth() -> AuthRecord {
         AuthRecord {
-            id: "auth-codex-1".to_string(),
+            id: "auth-codex-runtime-id".to_string(),
+            auth_index: "codex-howardliu.go@gmail.com-plus".to_string(),
             auth_kind: "oauth".to_string(),
             usage_source: "codex-user@example.com".to_string(),
             ..AuthRecord::default()
@@ -702,7 +710,7 @@ mod tests {
         assert_eq!(payload.alias, "codex-latest");
         assert_eq!(payload.endpoint, "POST /v1/responses");
         assert_eq!(payload.auth_type, "oauth");
-        assert_eq!(payload.auth_index, "auth-codex-1");
+        assert_eq!(payload.auth_index, "codex-howardliu.go@gmail.com-plus");
         assert_eq!(payload.source, "codex-user@example.com");
         assert_eq!(payload.api_key, "sk-downstream");
         assert_eq!(payload.request_id, "req-1");

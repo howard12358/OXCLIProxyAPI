@@ -62,6 +62,7 @@ type ProviderConfig struct {
 
 type AuthRecord struct {
 	ID             string        `json:"id"`
+	AuthIndex      string        `json:"auth_index"`
 	Provider       string        `json:"provider"`
 	AuthKind       string        `json:"auth_kind"`
 	UsageSource    string        `json:"usage_source,omitempty"`
@@ -225,6 +226,7 @@ func buildCodexAuthRecord(cfg *config.Config, auth *coreauth.Auth, now time.Time
 	labels := authLabels(auth)
 	record := AuthRecord{
 		ID:             strings.TrimSpace(auth.ID),
+		AuthIndex:      strings.TrimSpace(auth.EnsureIndex()),
 		Provider:       providerCodex,
 		AuthKind:       authKindOAuth,
 		UsageSource:    usageSourceForAuth(auth),

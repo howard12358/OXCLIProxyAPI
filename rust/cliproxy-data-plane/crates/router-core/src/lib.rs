@@ -421,6 +421,7 @@ mod tests {
     fn auth(id: &str, priority: i32, enabled: bool, cooldown_until: Option<&str>) -> AuthRecord {
         AuthRecord {
             id: id.to_string(),
+            auth_index: format!("{id}-index"),
             provider: "codex".to_string(),
             auth_kind: String::new(),
             usage_source: String::new(),

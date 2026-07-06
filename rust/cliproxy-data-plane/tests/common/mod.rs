@@ -90,6 +90,7 @@ pub fn codex_oauth_auth(
 ) -> AuthRecord {
     AuthRecord {
         id: id.to_string(),
+        auth_index: format!("{id}-index"),
         provider: "codex".to_string(),
         auth_kind: "oauth".to_string(),
         usage_source: format!("{id}@example.test"),

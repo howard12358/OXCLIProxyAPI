@@ -129,6 +129,8 @@ pub mod snapshot {
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
     pub struct AuthRecord {
         pub id: String,
+        #[serde(default)]
+        pub auth_index: String,
         pub provider: String,
         #[serde(default)]
         pub auth_kind: String,
