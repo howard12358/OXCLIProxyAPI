@@ -116,3 +116,35 @@ func TestReconcileEmbeddedDataPlaneRestartsWhenBootstrapConfigChanges(t *testing
 		t.Fatalf("RuntimeResponsesBaseURL = %q, want %q", got, "http://127.0.0.1:4102")
 	}
 }
+
+func TestReconcileEmbeddedDataPlaneUsesEmbeddedDefaultsWhenDataPlaneConfigIsOmitted(t *testing.T) {
+	cfg := &config.Config{
+		Host: "127.0.0.1",
+		Port: 8318,
+	}
+	var got embedded.SupervisorConfig
+	service := &Service{
+		cfg: cfg,
+		embeddedDataPlaneFactory: func(cfg embedded.SupervisorConfig) embeddedDataPlaneController {
+			got = cfg
+			return &fakeEmbeddedDataPlaneController{baseURL: "http://" + cfg.BindAddr}
+		},
+	}
+
+	if err := service.reconcileEmbeddedDataPlane(context.Background(), cfg); err != nil {
+		t.Fatalf("reconcile error = %v", err)
+	}
+
+	if got.BindAddr != "127.0.0.1:4100" {
+		t.Fatalf("BindAddr = %q, want %q", got.BindAddr, "127.0.0.1:4100")
+	}
+	if got.LogLevel != "info" {
+		t.Fatalf("LogLevel = %q, want %q", got.LogLevel, "info")
+	}
+	if got.StartupTimeout != 20*time.Second {
+		t.Fatalf("StartupTimeout = %v, want %v", got.StartupTimeout, 20*time.Second)
+	}
+	if runtimeURL := cfg.DataPlane.RuntimeResponsesBaseURL; runtimeURL != "http://127.0.0.1:4100" {
+		t.Fatalf("RuntimeResponsesBaseURL = %q, want %q", runtimeURL, "http://127.0.0.1:4100")
+	}
+}

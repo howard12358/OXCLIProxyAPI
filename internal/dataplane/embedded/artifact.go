@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 )
 
 var ErrEmbeddedArtifactUnavailable = errors.New("embedded data plane artifact is unavailable")
@@ -74,29 +72,15 @@ func ResolveStateDir(override string) (string, error) {
 		return filepath.Abs(trimmed)
 	}
 
-	if base := strings.TrimSpace(util.WritablePath()); base != "" {
-		return filepath.Join(base, "cliproxy", "data-plane"), nil
-	}
-
-	homeDir, err := os.UserHomeDir()
+	executablePath, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("resolve user home for embedded data plane: %w", err)
+		return "", fmt.Errorf("resolve executable path for embedded data plane: %w", err)
 	}
-
-	switch runtime.GOOS {
-	case "darwin":
-		return filepath.Join(homeDir, "Library", "Application Support", "cliproxy", "data-plane"), nil
-	case "windows":
-		if localAppData := strings.TrimSpace(os.Getenv("LocalAppData")); localAppData != "" {
-			return filepath.Join(localAppData, "cliproxy", "data-plane"), nil
-		}
-		return filepath.Join(homeDir, "AppData", "Local", "cliproxy", "data-plane"), nil
-	default:
-		if xdgStateHome := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); xdgStateHome != "" {
-			return filepath.Join(xdgStateHome, "cliproxy", "data-plane"), nil
-		}
-		return filepath.Join(homeDir, ".local", "state", "cliproxy", "data-plane"), nil
+	resolvedExecutablePath, err := filepath.EvalSymlinks(executablePath)
+	if err != nil {
+		resolvedExecutablePath = executablePath
 	}
+	return filepath.Dir(resolvedExecutablePath), nil
 }
 
 func MaterializeArtifact(stateDir string, artifact *Artifact) (path string, reused bool, err error) {

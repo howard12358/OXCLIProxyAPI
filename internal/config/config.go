@@ -416,6 +416,7 @@ type PayloadModelRule struct {
 type DataPlaneConfig struct {
 	// Mode controls how the Rust data plane is connected.
 	// Supported values:
+	// - "disabled": disable Rust data-plane routing even on the rusty branch
 	// - "embedded": Go supervises a local Rust child process
 	// - "external": Go connects to an externally managed Rust data plane
 	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
@@ -446,6 +447,8 @@ type EmbeddedDataPlaneConfig struct {
 func (cfg DataPlaneConfig) EffectiveMode() string {
 	mode := strings.ToLower(strings.TrimSpace(cfg.Mode))
 	switch mode {
+	case "disabled", "off", "none":
+		return ""
 	case "embedded", "external":
 		return mode
 	}
@@ -455,7 +458,7 @@ func (cfg DataPlaneConfig) EffectiveMode() string {
 	if cfg.Embedded.Enabled {
 		return "embedded"
 	}
-	return ""
+	return "embedded"
 }
 
 // EffectiveResponsesBaseURL returns the runtime routing target after applying any runtime-only override.

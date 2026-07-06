@@ -19,6 +19,27 @@ func TestResolveStateDirUsesExplicitDirectory(t *testing.T) {
 	}
 }
 
+func TestResolveStateDirDefaultsToExecutableDirectory(t *testing.T) {
+	t.Parallel()
+
+	executablePath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("Executable() error = %v", err)
+	}
+	resolvedExecutablePath, err := filepath.EvalSymlinks(executablePath)
+	if err != nil {
+		resolvedExecutablePath = executablePath
+	}
+
+	dir, err := ResolveStateDir("")
+	if err != nil {
+		t.Fatalf("ResolveStateDir() error = %v", err)
+	}
+	if dir != filepath.Dir(resolvedExecutablePath) {
+		t.Fatalf("ResolveStateDir() = %q, want %q", dir, filepath.Dir(resolvedExecutablePath))
+	}
+}
+
 func TestMaterializeArtifactReusesMatchingBinary(t *testing.T) {
 	t.Parallel()
 

@@ -133,6 +133,7 @@
   - `.env` autoload
   - optional storage backend env vars
   - watcher reloads config / auth state
+  - on the `rusty` branch, `data-plane` defaults to embedded mode unless config explicitly selects `external` or `disabled`
 - Rust:
   - CLI flags + environment variables
   - runtime snapshot from file or HTTP
@@ -143,7 +144,7 @@
   - Logrus
   - optional file logging
   - request logs and error logs configurable
-  - embedded Rust data-plane supervisors materialize artifacts under the configured state directory and write child-process `stdout.log` / `stderr.log` under `stateDir/logs/`
+  - embedded Rust data-plane supervisors materialize artifacts under the configured state directory; when `state-dir` is omitted this now defaults to the `CLIProxyAPI` executable directory, and child-process `stdout.log` / `stderr.log` live under `stateDir/logs/`
 - Rust:
   - `tracing` / `tracing-subscriber`
 

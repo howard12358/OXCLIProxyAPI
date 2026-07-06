@@ -7,6 +7,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Main Go server is the primary proxy runtime and management plane.
 - Go server exposes API routes, management routes, auth handling, model registry, watcher-based reload, and SDK hooks.
 - Rust data plane exists as a separate workspace and can serve `/v1/responses`.
+- On the `rusty` branch, an empty `data-plane` config now defaults to embedded Rust `/v1/responses`; explicit `data-plane.mode: disabled` is the opt-out.
 - Rust data plane consumes Go-exported runtime snapshot by file or HTTP.
 - Rust data plane now aligns milestone 8 with CPA usage-queue semantics instead of exposing a separate Prometheus-style route.
 - Rust data plane accepts HTTP and CPA-compatible Redis RESP usage-consumer traffic on the same TCP listener by sniffing the first connection byte.
@@ -18,6 +19,7 @@ This document records durable repository-level state. It is not a per-session ta
 - External dev-stack usage bridging now aligns Go `MANAGEMENT_PASSWORD` with Rust `--snapshot-bearer-token`, so the preferred RESP subscription path authenticates in `make dev-stack-url`.
 - Dedicated embedded Docker image build support exists through `Dockerfile.embedded` and the manual `docker-embedded-image` workflow, including selectable Rust `release` / `debug` build profiles; the existing tag-driven Docker release remains unchanged.
 - Embedded Rust data-plane state directories now keep the materialized binary and checksum files at the root while writing `stdout.log` and `stderr.log` under a `logs/` subdirectory for cleaner operations.
+- When `data-plane.embedded.state-dir` is omitted, the embedded Rust data-plane state directory now defaults to the directory containing the running `CLIProxyAPI` executable.
 - Rust `/v1/responses` no longer falls back to local mock responses when no real upstream is available.
 
 ## Implemented Capabilities

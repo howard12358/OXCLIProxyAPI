@@ -45,8 +45,15 @@ func TestDataPlaneConfigEffectiveMode(t *testing.T) {
 			want: "embedded",
 		},
 		{
-			name: "empty config disables data plane",
+			name: "empty config defaults to embedded",
 			cfg:  DataPlaneConfig{},
+			want: "embedded",
+		},
+		{
+			name: "explicit disabled mode turns data plane off",
+			cfg: DataPlaneConfig{
+				Mode: "disabled",
+			},
 			want: "",
 		},
 	}

@@ -177,16 +177,17 @@ routing:
   # How long session-to-auth bindings are retained. Default: 1h
   session-affinity-ttl: "1h"
 
-# Optional Rust data-plane routing.
+# Rusty branch defaults to embedded Rust data-plane routing for /v1/responses.
 # external mode: Go forwards /v1/responses to an already running Rust data plane.
 # embedded mode: Go manages a local Rust child process and uses it for /v1/responses.
+# disabled mode: explicitly turn Rust data-plane routing off.
 # data-plane:
-#   mode: "external" # embedded | external
+#   mode: "disabled" # disabled | embedded | external
 #   responses-base-url: "http://127.0.0.1:4100" # used by external mode
 #   embedded:
-#     enabled: true
+#     enabled: true # legacy flag; empty data-plane config already defaults to embedded mode
 #     bind-addr: "127.0.0.1:4100"
-#     state-dir: "" # empty means use the platform default state directory
+#     state-dir: "" # empty means place embedded Rust files next to the CLIProxyAPI executable
 #     log-level: "info"
 #     extract-policy: "reuse-if-match"
 #     startup-timeout-seconds: 20
