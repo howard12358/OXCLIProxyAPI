@@ -7,8 +7,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 COPY . .
 
 ARG VERSION=dev
+ARG RUST_PROFILE=release
 
-RUN cargo build --manifest-path rust/cliproxy-data-plane/Cargo.toml --release --locked
+RUN case "${RUST_PROFILE}" in \
+        release) cargo build --manifest-path rust/cliproxy-data-plane/Cargo.toml --release --locked && cp rust/cliproxy-data-plane/target/release/cliproxy-data-plane /tmp/cliproxy-data-plane ;; \
+        debug) cargo build --manifest-path rust/cliproxy-data-plane/Cargo.toml --locked && cp rust/cliproxy-data-plane/target/debug/cliproxy-data-plane /tmp/cliproxy-data-plane ;; \
+        *) echo "unsupported RUST_PROFILE: ${RUST_PROFILE}" >&2; exit 1 ;; \
+    esac
 
 FROM golang:1.26-bookworm AS builder
 
@@ -21,7 +26,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-COPY --from=rust-builder /app/rust/cliproxy-data-plane/target/release/cliproxy-data-plane /tmp/cliproxy-data-plane
+COPY --from=rust-builder /tmp/cliproxy-data-plane /tmp/cliproxy-data-plane
 
 ARG VERSION=dev
 ARG COMMIT=none

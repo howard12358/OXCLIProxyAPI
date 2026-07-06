@@ -25,9 +25,13 @@ without changing the existing tag-driven Docker release workflow.
 - Publish the embedded image as `ox-cli-proxy-api` under the Docker Hub namespace from
   `DOCKERHUB_USERNAME` by default, with an optional manual namespace override.
 - Default the manual workflow tag to `v0.0.1` for `linux/amd64,linux/arm64`.
+- Allow the manual workflow to choose `rust_profile=release` or `rust_profile=debug`.
+  `release` remains the default; `debug` is for faster functional validation only.
+- Use Docker Buildx GitHub Actions cache for the embedded image workflow.
 
 ## Consequences
 
 - The normal Docker release remains Go-only until explicitly changed.
 - Embedded Rust data-plane testing can use an isolated Docker tag.
 - Multi-arch embedded images are the default validation target.
+- Debug embedded images compile faster but are not suitable for throughput or latency validation.
