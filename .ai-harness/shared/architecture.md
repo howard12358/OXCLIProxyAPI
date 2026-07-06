@@ -83,11 +83,13 @@
   - config + auth -> route selection -> executor / translator -> upstream provider -> normalized response
 - Go -> Rust runtime-config path:
   - Go config/auth state -> runtime snapshot -> Rust pull / apply
+  - auth records include the Go-resolved `usage_source` so Rust usage payloads can preserve CPA identity attribution
 - Rust responses path:
   - request -> request IR -> runtime snapshot + router core -> upstream runtime -> stream-event IR + normalized downstream response -> CPA-shaped usage payload emission
   - if no real upstream execution path can be constructed, return error immediately instead of synthesizing local mock responses
 - Rust usage-consumption path:
   - `/v1/responses` telemetry -> local CPA-compatible usage queue
+  - Rust captures downstream API key headers at the HTTP boundary and emits them as CPA-compatible `api_key`; selected auth `usage_source` is emitted as CPA-compatible `source`
   - HTTP consumers can pop records with `/v0/management/usage-queue?count=N`
   - Redis RESP consumers can use the same TCP listener with `AUTH`, `SUBSCRIBE usage/errors`, and `LPOP/RPOP usage`
 - External CPA usage-consumer path:

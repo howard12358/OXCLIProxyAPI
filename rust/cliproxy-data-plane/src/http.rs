@@ -185,6 +185,7 @@ async fn post_responses(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned);
+            let api_key = downstream_api_key(&headers);
             handle_responses(
                 state.runtime,
                 state.router_core,
@@ -192,6 +193,7 @@ async fn post_responses(
                 state.telemetry,
                 request,
                 request_id,
+                api_key,
             )
             .await
         }
@@ -207,6 +209,35 @@ async fn post_responses(
         )
             .into_response(),
     }
+}
+
+fn downstream_api_key(headers: &HeaderMap) -> Option<String> {
+    // CPA 原生 usage 记录使用认证中间件写入的 userApiKey。
+    // Rust 数据面不经过 Go 的 Gin context，只能在入口处从下游请求头恢复同一语义。
+    for name in ["authorization", "x-api-key", "x-goog-api-key"] {
+        let Some(value) = headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        if name == "authorization" {
+            let Some((scheme, token)) = value.split_once(' ') else {
+                continue;
+            };
+            if scheme.eq_ignore_ascii_case("bearer") {
+                let token = token.trim();
+                if !token.is_empty() {
+                    return Some(token.to_string());
+                }
+            }
+            continue;
+        }
+        return Some(value.to_string());
+    }
+    None
 }
 
 /// 接收 Go 管理面的 snapshot 变更通知，并异步触发一次主动刷新。

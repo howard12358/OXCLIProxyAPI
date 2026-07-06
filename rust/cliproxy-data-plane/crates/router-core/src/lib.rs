@@ -423,6 +423,7 @@ mod tests {
             id: id.to_string(),
             provider: "codex".to_string(),
             auth_kind: String::new(),
+            usage_source: String::new(),
             priority,
             enabled,
             supports_models: vec!["gpt-5-codex".to_string()],

@@ -92,6 +92,7 @@ pub fn codex_oauth_auth(
         id: id.to_string(),
         provider: "codex".to_string(),
         auth_kind: "oauth".to_string(),
+        usage_source: format!("{id}@example.test"),
         priority,
         enabled: true,
         supports_models: vec!["gpt-5-codex".to_string()],

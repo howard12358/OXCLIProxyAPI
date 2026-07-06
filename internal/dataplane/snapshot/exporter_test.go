@@ -46,6 +46,7 @@ func TestBuildRuntimeSnapshotExportsCodexOAuthAuth(t *testing.T) {
 		Metadata: map[string]any{
 			"access_token": "token-1",
 			"account_id":   "acct-1",
+			"email":        "codex-user@example.com",
 		},
 	})
 	if err != nil {
@@ -83,6 +84,9 @@ func TestBuildRuntimeSnapshotExportsCodexOAuthAuth(t *testing.T) {
 	}
 	if auth.Priority != 120 {
 		t.Fatalf("auth.priority = %d, want 120", auth.Priority)
+	}
+	if auth.UsageSource != "codex-user@example.com" {
+		t.Fatalf("auth.usage_source = %q, want codex-user@example.com", auth.UsageSource)
 	}
 	if auth.Execution.Codex == nil {
 		t.Fatal("auth.execution.codex = nil")

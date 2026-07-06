@@ -195,6 +195,7 @@ async fn execute_responses_for_auth_uses_selected_codex_oauth_credential() {
         id: "auth-codex-oauth-1".to_string(),
         provider: "codex".to_string(),
         auth_kind: "oauth".to_string(),
+        usage_source: "codex-user@example.com".to_string(),
         priority: 100,
         enabled: true,
         supports_models: vec!["gpt-5-codex".to_string()],

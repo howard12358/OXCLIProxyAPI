@@ -25,12 +25,14 @@ pub async fn handle_responses(
     telemetry: AppTelemetry,
     request: ResponsesRequest,
     request_id: Option<String>,
+    api_key: Option<String>,
 ) -> Response<Body> {
     let request_telemetry = telemetry.new_request(
         &request.model,
         request.stream,
         runtime.current_snapshot().as_deref(),
         request_id,
+        api_key,
     );
 
     if !runtime.responses_route_enabled() {

@@ -133,6 +133,8 @@ pub mod snapshot {
         #[serde(default)]
         pub auth_kind: String,
         #[serde(default)]
+        pub usage_source: String,
+        #[serde(default)]
         pub priority: i32,
         #[serde(default = "default_true")]
         pub enabled: bool,

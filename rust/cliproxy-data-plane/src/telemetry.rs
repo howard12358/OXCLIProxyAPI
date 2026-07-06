@@ -55,6 +55,7 @@ impl AppTelemetry {
         _stream: bool,
         snapshot: Option<&RuntimeSnapshot>,
         request_id: Option<String>,
+        api_key: Option<String>,
     ) -> RequestTelemetry {
         let usage_queue = snapshot.map(|value| &value.usage_queue);
         RequestTelemetry {
@@ -66,6 +67,7 @@ impl AppTelemetry {
                 .unwrap_or(false),
             state: Arc::new(RequestTelemetryState {
                 request_id: Mutex::new(request_id.unwrap_or_default()),
+                api_key: Mutex::new(api_key.unwrap_or_default()),
                 ..RequestTelemetryState::default()
             }),
         }
@@ -95,6 +97,8 @@ struct RequestTelemetryState {
     resolved_model: Mutex<String>,
     auth_id: Mutex<String>,
     auth_type: Mutex<String>,
+    usage_source: Mutex<String>,
+    api_key: Mutex<String>,
     request_id: Mutex<String>,
     response_id: Mutex<String>,
     response_headers: Mutex<BTreeMap<String, Vec<String>>>,
@@ -128,6 +132,7 @@ impl RequestTelemetry {
         self.set_auth_id(plan.auth_id.clone());
         if let Some(auth) = selected_auth {
             self.set_auth_type(auth.auth_kind.clone());
+            self.set_usage_source(auth.usage_source.clone());
         }
     }
 
@@ -225,7 +230,7 @@ impl RequestTelemetry {
             timestamp: now_rfc3339(),
             latency_ms: self.started_at.elapsed().as_millis() as u64,
             ttft_ms: self.state.first_byte_ms.load(Ordering::SeqCst),
-            source: String::new(),
+            source: self.usage_source(),
             auth_index: self.auth_id(),
             tokens: UsageQueueTokens {
                 input_tokens: self.state.input_tokens.load(Ordering::SeqCst),
@@ -252,7 +257,7 @@ impl RequestTelemetry {
             alias: self.request_model.clone(),
             endpoint: RESPONSES_ENDPOINT.to_string(),
             auth_type: self.auth_type(),
-            api_key: String::new(),
+            api_key: self.api_key(),
             request_id: self.effective_request_id(),
             reasoning_effort: String::new(),
             service_tier: DEFAULT_SERVICE_TIER.to_string(),
@@ -320,6 +325,14 @@ impl RequestTelemetry {
             .expect("auth_type lock poisoned") = value;
     }
 
+    fn set_usage_source(&self, value: String) {
+        *self
+            .state
+            .usage_source
+            .lock()
+            .expect("usage_source lock poisoned") = value;
+    }
+
     fn set_response_id(&self, value: String) {
         *self
             .state
@@ -361,6 +374,28 @@ impl RequestTelemetry {
             .auth_id
             .lock()
             .expect("auth_id lock poisoned")
+            .clone()
+    }
+
+    fn usage_source(&self) -> String {
+        let source = self
+            .state
+            .usage_source
+            .lock()
+            .expect("usage_source lock poisoned")
+            .clone();
+        if !source.trim().is_empty() {
+            return source;
+        }
+        // 对齐 Go resolveUsageSource：账号信息缺失时，使用下游 API key 作为最后归因来源。
+        self.api_key()
+    }
+
+    fn api_key(&self) -> String {
+        self.state
+            .api_key
+            .lock()
+            .expect("api_key lock poisoned")
             .clone()
     }
 
@@ -623,6 +658,7 @@ mod tests {
         AuthRecord {
             id: "auth-codex-1".to_string(),
             auth_kind: "oauth".to_string(),
+            usage_source: "codex-user@example.com".to_string(),
             ..AuthRecord::default()
         }
     }
@@ -648,7 +684,13 @@ mod tests {
     async fn emits_cpa_shaped_usage_queue_payload_for_successful_request() {
         let (app, mut rx) = AppTelemetry::new_test(4);
         let snapshot = test_snapshot(true, "redis");
-        let request = app.new_request("codex-latest", false, Some(&snapshot), Some("req-1".into()));
+        let request = app.new_request(
+            "codex-latest",
+            false,
+            Some(&snapshot),
+            Some("req-1".into()),
+            Some("sk-downstream".into()),
+        );
         request.bind_execution_plan(&test_plan(), Some(&test_auth()));
 
         observe_success(&request);
@@ -661,6 +703,8 @@ mod tests {
         assert_eq!(payload.endpoint, "POST /v1/responses");
         assert_eq!(payload.auth_type, "oauth");
         assert_eq!(payload.auth_index, "auth-codex-1");
+        assert_eq!(payload.source, "codex-user@example.com");
+        assert_eq!(payload.api_key, "sk-downstream");
         assert_eq!(payload.request_id, "req-1");
         assert_eq!(payload.tokens.total_tokens, 30);
         assert_eq!(payload.fail.status_code, 200);
@@ -712,7 +756,7 @@ mod tests {
     async fn does_not_emit_payload_when_usage_queue_backend_is_not_redis() {
         let (app, mut rx) = AppTelemetry::new_test(4);
         let snapshot = test_snapshot(true, "log");
-        let request = app.new_request("codex-latest", false, Some(&snapshot), None);
+        let request = app.new_request("codex-latest", false, Some(&snapshot), None, None);
         request.bind_execution_plan(&test_plan(), Some(&test_auth()));
 
         observe_success(&request);

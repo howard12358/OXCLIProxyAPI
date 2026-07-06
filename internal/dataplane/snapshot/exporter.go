@@ -64,6 +64,7 @@ type AuthRecord struct {
 	ID             string        `json:"id"`
 	Provider       string        `json:"provider"`
 	AuthKind       string        `json:"auth_kind"`
+	UsageSource    string        `json:"usage_source,omitempty"`
 	Priority       int           `json:"priority"`
 	Enabled        bool          `json:"enabled"`
 	SupportsModels []string      `json:"supports_models"`
@@ -226,6 +227,7 @@ func buildCodexAuthRecord(cfg *config.Config, auth *coreauth.Auth, now time.Time
 		ID:             strings.TrimSpace(auth.ID),
 		Provider:       providerCodex,
 		AuthKind:       authKindOAuth,
+		UsageSource:    usageSourceForAuth(auth),
 		Priority:       parsePriority(auth.Attributes),
 		Enabled:        true,
 		SupportsModels: supportsModels,
@@ -242,6 +244,26 @@ func buildCodexAuthRecord(cfg *config.Config, auth *coreauth.Auth, now time.Time
 		CooldownUntil: cooldownUntil,
 	}
 	return record, true
+}
+
+func usageSourceForAuth(auth *coreauth.Auth) string {
+	if auth == nil {
+		return ""
+	}
+	if _, value := auth.AccountInfo(); strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	if auth.Metadata != nil {
+		if email := strings.TrimSpace(anyString(auth.Metadata, "email")); email != "" {
+			return email
+		}
+	}
+	if auth.Attributes != nil {
+		if apiKey := strings.TrimSpace(auth.Attributes["api_key"]); apiKey != "" {
+			return apiKey
+		}
+	}
+	return ""
 }
 
 func codexModelsForAuth(auth *coreauth.Auth) []string {

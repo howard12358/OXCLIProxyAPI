@@ -11,6 +11,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Rust data plane now aligns milestone 8 with CPA usage-queue semantics instead of exposing a separate Prometheus-style route.
 - Rust data plane accepts HTTP and CPA-compatible Redis RESP usage-consumer traffic on the same TCP listener by sniffing the first connection byte.
 - Go CPA now bridges Rust data-plane usage queue records back into CPA `internal/redisqueue` with RESP `SUBSCRIBE usage` first and HTTP pop fallback, so external usage consumers can keep connecting to CPA.
+- Go runtime snapshots include auth `usage_source` for Rust usage attribution, and Rust `/v1/responses` usage payloads include downstream API key attribution when present.
 - External dev-stack usage bridging now aligns Go `MANAGEMENT_PASSWORD` with Rust `--snapshot-bearer-token`, so the preferred RESP subscription path authenticates in `make dev-stack-url`.
 - Dedicated embedded Docker image build support exists through `Dockerfile.embedded` and the manual `docker-embedded-image` workflow; the existing tag-driven Docker release remains unchanged.
 - Rust `/v1/responses` no longer falls back to local mock responses when no real upstream is available.

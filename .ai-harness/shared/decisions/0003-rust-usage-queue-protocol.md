@@ -18,6 +18,7 @@ CPA 的 usage 消费面不是独立 Prometheus 指标接口，而是进程内 re
 Rust 数据平面实现 CPA-compatible usage queue：
 
 - `/v1/responses` telemetry 在 snapshot 开启 `usage_queue.enabled=true` 且 `backend=redis` 时，把 CPA-shaped payload 写入本地 usage queue。
+- Go snapshot 为 auth record 导出 `usage_source`，Rust 在 usage payload 中作为 CPA `source` 发出；Rust HTTP 入口从下游认证请求头恢复 CPA `api_key` 归因。
 - 本地 usage queue 遵循 CPA 语义：有 `usage` 订阅者时直接广播，不再写入内存队列；没有订阅者时进入 FIFO 队列，供 pop 消费。
 - `SubscribeUsage` 等价路径首包发送 `{"support_refresh":true}`，并保留 `refresh` 控制消息能力。
 - HTTP 暴露 `/v0/management/usage-queue?count=N`，pop 后即消费。
