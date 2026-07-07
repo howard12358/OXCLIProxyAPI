@@ -89,6 +89,17 @@ make diff-snapshots
 make test-responses
 ```
 
+- Production-style embedded smoke:
+
+```bash
+MANAGEMENT_KEY=<management-key> \
+API_KEY=<api-key> \
+CPA_BASE_URL=http://127.0.0.1:18317 \
+KEEPER_URL=http://127.0.0.1:28081 \
+CONTAINER_NAME=ox-cli-proxy-api \
+./scripts/embedded-smoke.sh
+```
+
 ## Recommended Commands Before / After Changes
 
 Before changes:
@@ -125,6 +136,9 @@ cargo test --workspace --manifest-path rust/cliproxy-data-plane/Cargo.toml
   - relevant Go package tests
   - Rust route/workspace tests
   - manual `make dev-stack` or `make dev-stack-url` verification when practical
+- Deployment / embedded runtime verification changes:
+  - syntax-check or dry-run the smoke script when changed
+  - run `./scripts/embedded-smoke.sh` against a real embedded deployment when practical
 
 ## Current Coverage Risks
 

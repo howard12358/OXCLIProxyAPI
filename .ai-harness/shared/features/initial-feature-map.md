@@ -71,6 +71,7 @@
   - repair and normalize SSE frames on the `/v1/responses` HTTP streaming path
   - emit CPA-shaped `/v1/responses` usage queue payloads into a local CPA-compatible usage queue
   - preserve CPA usage attribution by carrying Go-resolved auth `usage_source` and downstream API key into Rust usage payloads
+  - align Codex upstream request compatibility with the Go-native CPA translator for the current Rust `/v1/responses` path
   - expose `/v0/management/usage-queue` and Redis RESP usage-consumer commands for CPA-compatible usage consumption
   - fail `/v1/responses` with a direct upstream error when no real upstream execution path is available
   - consume runtime snapshot from Go

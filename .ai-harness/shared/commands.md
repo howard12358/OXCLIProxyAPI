@@ -132,6 +132,7 @@ docker compose up -d
 docker compose down
 docker compose logs -f
 ./docker-build.sh
+MANAGEMENT_KEY=<management-key> API_KEY=<api-key> ./scripts/embedded-smoke.sh
 ```
 
 ## Deployment

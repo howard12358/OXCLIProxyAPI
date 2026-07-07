@@ -69,7 +69,7 @@
 - `rust/cliproxy-data-plane/src/responses/`
   - Rust `/v1/responses` child modules split by responsibility:
   - `handler.rs` route handler orchestration and plan/bootstrap flow
-  - `protocol.rs` minimal request / stream-event protocol IR for `/v1/responses`
+  - `protocol.rs` minimal request / stream-event protocol IR for `/v1/responses`, plus Codex-specific request emission compatibility rewrites
   - `upstream.rs` real upstream execution, request normalization, and auth retry
   - `sse.rs` SSE framing and completed-output repair
 - `rust/cliproxy-data-plane/crates/usage-events/`
@@ -87,6 +87,7 @@
 - Rust responses path:
   - request -> centralized request metadata extraction -> request IR -> runtime snapshot + router core -> upstream runtime -> stream-event IR + normalized downstream response -> CPA-shaped usage payload emission
   - request metadata now owns shared extraction of `session_id`, `pinned_auth_id`, `reasoning.effort` / fallback `reasoning_effort`, and `service_tier` before routing and telemetry
+  - when provider=`Codex`, request IR emission is also the compatibility boundary for forced rewrites (`store=false`, `parallel_tool_calls/include`), filtered unsupported fields (`max_output_tokens`, `context_management`, `truncation`, `user`, etc.), `system -> developer` input-role normalization, and builtin tool alias normalization
   - if no real upstream execution path can be constructed, return error immediately instead of synthesizing local mock responses
 - Rust usage-consumption path:
   - `/v1/responses` telemetry -> local CPA-compatible usage queue

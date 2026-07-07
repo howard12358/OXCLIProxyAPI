@@ -30,6 +30,7 @@
 - [当前架构说明](./current/当前架构说明.md)
 - [运行时快照契约](./current/运行时快照契约.md)
 - [v1 接口矩阵说明](./current/v1接口矩阵说明.md)
+- [Responses 到 Codex 兼容矩阵](./current/Responses到Codex兼容矩阵.md)
 - [用量队列契约与差距](./current/用量队列契约与差距.md)
 
 ## roadmap

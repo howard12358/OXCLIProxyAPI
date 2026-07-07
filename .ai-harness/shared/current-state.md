@@ -16,9 +16,11 @@ This document records durable repository-level state. It is not a per-session ta
 - Go runtime snapshots also export stable auth `auth_index`, and Rust usage payloads now emit that index instead of raw auth IDs while recording TTFT from the first upstream body chunk.
 - Rust `/v1/responses` usage telemetry now preserves downstream `reasoning.effort` / fallback `reasoning_effort` and `service_tier`, and TTFT is fixed at the first observed response byte instead of being overwritten by later chunks.
 - Go data-plane usage bridge keeps the same external auth/fallback behavior, but bridge enablement and auth selection are now resolved through a single internal config step; Rust `/v1/responses` likewise centralizes request metadata extraction for router planning and telemetry reuse.
+- Rust `/v1/responses` Codex upstream emission now explicitly aligns its compatibility boundary with the Go-native Codex translator for key request rewrites, including forced `parallel_tool_calls/include`, stripping unsupported generation / context fields, `system -> developer` input role normalization, and builtin tool alias normalization.
 - External dev-stack usage bridging now aligns Go `MANAGEMENT_PASSWORD` with Rust `--snapshot-bearer-token`, so the preferred RESP subscription path authenticates in `make dev-stack-url`.
 - Dedicated embedded Docker image build support exists through `Dockerfile.embedded` and the manual `docker-embedded-image` workflow, including selectable Rust `release` / `debug` build profiles; the existing tag-driven Docker release remains unchanged.
 - The repository root `docker-compose.yml` now defaults to pulling `rustyllh/ox-cli-proxy-api:latest`, while `docker-build.sh` and `docker-build.ps1` remain the source-build entrypoints that produce a separate local image tag.
+- A repository smoke script now exists for embedded Docker deployments, covering `healthz`, runtime snapshot, non-stream and stream `/v1/responses`, usage queue pop, keeper reachability, and visible `[rs-stdout]` / `[rs-stderr]` prefixes in `docker logs`.
 - Embedded Rust data-plane state directories now keep the materialized binary and checksum files at the root while writing `stdout.log` and `stderr.log` under `logs/data-plane/`, with dedicated rotation and cleanup that is separate from Go application log retention; the supervisor also mirrors Rust stdout/stderr into the container's main stdout/stderr stream with stable prefixes so `docker logs` can see embedded Rust output.
 - When `data-plane.embedded.state-dir` is omitted, the embedded Rust data-plane state directory now defaults to the directory containing the running `CLIProxyAPI` executable.
 - Rust `/v1/responses` no longer falls back to local mock responses when no real upstream is available.
@@ -47,6 +49,7 @@ This document records durable repository-level state. It is not a per-session ta
   - pre-commit auth retry classification for `/v1/responses`
   - upstream request/response redaction helpers for logging
   - Codex native Responses array input and extra top-level request fields are preserved through Rust `/v1/responses` upstream normalization
+  - Codex request emission compatibility matrix covering forced rewrites, filtered unsupported fields, conditional `service_tier`, `system -> developer`, and web-search builtin tool alias normalization
   - snapshot notify endpoint
   - runtime snapshot observation endpoint
   - graceful SIGTERM / Ctrl-C shutdown logging for the Rust data-plane listener
@@ -56,6 +59,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Full production-grade Go-managed Rust instance registry / heartbeat lifecycle is not fully confirmed from current repository state.
 - Formal multi-instance Rust data-plane management is `待确认`.
 - Some deployment and management-center flows are partially documented externally; exact in-repo completeness is `待确认`.
+- Public `cpa-usage-keeper` login automation on the currently observed deployment remains `待确认` because the public login endpoints return `403 {"error":"fetch request required"}` while the same error string is not present in the inspected local keeper repository, indicating an external gate or deployed-version drift outside this repo.
 
 ## Current Active Development Direction
 
