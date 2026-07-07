@@ -69,6 +69,7 @@ type Supervisor struct {
 	process      Process
 	stdoutCloser io.Closer
 	stderrCloser io.Closer
+	logCleaner   *logCleaner
 	status       SupervisorStatus
 }
 
@@ -83,10 +84,10 @@ func NewSupervisor(cfg SupervisorConfig) *Supervisor {
 		cfg.ReadinessChecker = HTTPReadinessChecker
 	}
 	if cfg.StdoutWriterFactory == nil {
-		cfg.StdoutWriterFactory = defaultLogWriterFactory
+		cfg.StdoutWriterFactory = defaultStdoutWriterFactory
 	}
 	if cfg.StderrWriterFactory == nil {
-		cfg.StderrWriterFactory = defaultLogWriterFactory
+		cfg.StderrWriterFactory = defaultStderrWriterFactory
 	}
 	if cfg.StartupTimeout <= 0 {
 		cfg.StartupTimeout = 20 * time.Second
@@ -126,18 +127,25 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	logDir := filepath.Join(stateDir, "logs")
+	logDir := filepath.Join(stateDir, "logs", embeddedLogSubdir)
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return fmt.Errorf("create embedded data plane log dir %s: %w", logDir, err)
 	}
+	cleaner := startEmbeddedLogCleaner(logDir)
 
 	stdoutWriter, err := s.cfg.StdoutWriterFactory(filepath.Join(logDir, "stdout.log"))
 	if err != nil {
+		if cleaner != nil {
+			cleaner.Stop()
+		}
 		return fmt.Errorf("open embedded data plane stdout log: %w", err)
 	}
 	stderrWriter, err := s.cfg.StderrWriterFactory(filepath.Join(logDir, "stderr.log"))
 	if err != nil {
 		_ = stdoutWriter.Close()
+		if cleaner != nil {
+			cleaner.Stop()
+		}
 		return fmt.Errorf("open embedded data plane stderr log: %w", err)
 	}
 
@@ -161,6 +169,9 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	if err != nil {
 		_ = stdoutWriter.Close()
 		_ = stderrWriter.Close()
+		if cleaner != nil {
+			cleaner.Stop()
+		}
 		return fmt.Errorf("start embedded data plane process: %w", err)
 	}
 
@@ -169,6 +180,7 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	s.process = process
 	s.stdoutCloser = stdoutWriter
 	s.stderrCloser = stderrWriter
+	s.logCleaner = cleaner
 	s.status = SupervisorStatus{
 		PID:             process.PID(),
 		BindAddr:        strings.TrimSpace(s.cfg.BindAddr),
@@ -230,6 +242,10 @@ func (s *Supervisor) Stop(context.Context) error {
 		_ = s.stderrCloser.Close()
 		s.stderrCloser = nil
 	}
+	if s.logCleaner != nil {
+		s.logCleaner.Stop()
+		s.logCleaner = nil
+	}
 	s.mu.Unlock()
 	if err != nil {
 		return fmt.Errorf("stop embedded data plane process: %w", err)
@@ -271,6 +287,10 @@ func (s *Supervisor) waitForExit(process Process) {
 	if s.stderrCloser != nil {
 		_ = s.stderrCloser.Close()
 		s.stderrCloser = nil
+	}
+	if s.logCleaner != nil {
+		s.logCleaner.Stop()
+		s.logCleaner = nil
 	}
 	if err != nil {
 		s.status.LastExitReason = err.Error()
@@ -324,10 +344,6 @@ func (p execProcess) Kill() error {
 		return nil
 	}
 	return p.cmd.Process.Kill()
-}
-
-func defaultLogWriterFactory(path string) (io.WriteCloser, error) {
-	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 }
 
 func HTTPReadinessChecker(ctx context.Context, baseURL string) error {

@@ -206,7 +206,7 @@ func TestSupervisorLogsLifecycle(t *testing.T) {
 	}
 }
 
-func TestSupervisorWritesStdLogsUnderLogsSubdirectory(t *testing.T) {
+func TestSupervisorWritesStdLogsUnderDataPlaneLogsSubdirectory(t *testing.T) {
 	t.Parallel()
 
 	process := &fakeProcess{pid: 101, waitCh: make(chan error, 1)}
@@ -242,8 +242,8 @@ func TestSupervisorWritesStdLogsUnderLogsSubdirectory(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	wantStdout := filepath.Join(stateDir, "logs", "stdout.log")
-	wantStderr := filepath.Join(stateDir, "logs", "stderr.log")
+	wantStdout := filepath.Join(stateDir, "logs", "data-plane", "stdout.log")
+	wantStderr := filepath.Join(stateDir, "logs", "data-plane", "stderr.log")
 	if stdoutPath != wantStdout {
 		t.Fatalf("stdout path = %q, want %q", stdoutPath, wantStdout)
 	}

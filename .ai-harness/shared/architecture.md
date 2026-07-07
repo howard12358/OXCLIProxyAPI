@@ -144,7 +144,7 @@
   - Logrus
   - optional file logging
   - request logs and error logs configurable
-  - embedded Rust data-plane supervisors materialize artifacts under the configured state directory; when `state-dir` is omitted this now defaults to the `CLIProxyAPI` executable directory, and child-process `stdout.log` / `stderr.log` live under `stateDir/logs/`
+  - embedded Rust data-plane supervisors materialize artifacts under the configured state directory; when `state-dir` is omitted this now defaults to the `CLIProxyAPI` executable directory, and child-process `stdout.log` / `stderr.log` live under `stateDir/logs/data-plane/` with embedded-specific rotation and cleanup while also being mirrored into the Go process stdout/stderr stream for container log visibility
 - Rust:
   - `tracing` / `tracing-subscriber`
 
