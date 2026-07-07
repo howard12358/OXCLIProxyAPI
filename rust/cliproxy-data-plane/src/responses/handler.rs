@@ -5,13 +5,13 @@ use cliproxy_common_types::{
 };
 use cliproxy_router_core::{PlanRequest, RouterCore};
 use cliproxy_upstream_runtime::UpstreamRuntime;
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::auth_state::AuthStateOverlay;
 use crate::runtime::RuntimeStateHandle;
 use crate::telemetry::AppTelemetry;
 use crate::usage_queue::UsageQueue;
 
+use super::routing_policy::resolve_effective_plan;
 use super::upstream::{execute_real_upstream, log_upstream_failure};
 use super::{ResponsesRequest, ResponsesRequestMetadata, error_response};
 
@@ -150,89 +150,4 @@ fn upstream_enabled_for_request(
         || selected_auth
             .map(|auth| upstream.can_execute_for_auth(auth))
             .unwrap_or(false)
-}
-
-fn resolve_effective_plan<'a>(
-    snapshot: &'a RuntimeSnapshot,
-    execution_plan: &ExecutionPlan,
-    auth_state: &AuthStateOverlay,
-) -> Option<(ExecutionPlan, Option<&'a AuthRecord>)> {
-    let now = OffsetDateTime::now_utc();
-    let chain = auth_retry_chain(snapshot, execution_plan)?;
-    let mut available = Vec::new();
-    for auth in chain {
-        if auth_blocked(snapshot, auth, &execution_plan.model, auth_state, now) {
-            continue;
-        }
-        available.push(auth);
-    }
-    let selected = *available.first()?;
-    let retry_candidates = available
-        .iter()
-        .skip(1)
-        .map(|auth| auth.id.clone())
-        .collect::<Vec<_>>();
-    Some((
-        ExecutionPlan {
-            provider: execution_plan.provider,
-            model: execution_plan.model.clone(),
-            auth_id: selected.id.clone(),
-            retry_candidates,
-            stickiness_source: execution_plan.stickiness_source.clone(),
-        },
-        Some(selected),
-    ))
-}
-
-fn auth_retry_chain<'a>(
-    snapshot: &'a RuntimeSnapshot,
-    execution_plan: &ExecutionPlan,
-) -> Option<Vec<&'a AuthRecord>> {
-    let mut chain = Vec::new();
-    chain.push(
-        snapshot
-            .auth_pool
-            .iter()
-            .find(|auth| auth.id == execution_plan.auth_id)?,
-    );
-    for auth_id in &execution_plan.retry_candidates {
-        if let Some(auth) = snapshot.auth_pool.iter().find(|auth| auth.id == *auth_id) {
-            chain.push(auth);
-        }
-    }
-    Some(chain)
-}
-
-fn auth_blocked(
-    _snapshot: &RuntimeSnapshot,
-    auth: &AuthRecord,
-    model: &str,
-    auth_state: &AuthStateOverlay,
-    now: OffsetDateTime,
-) -> bool {
-    if snapshot_cooldown_active(auth, now) {
-        return true;
-    }
-    let auth_index = auth_overlay_index(auth);
-    auth_state.auth_blocked_until(&auth_index, now).is_some()
-        || auth_state
-            .model_blocked_until(&auth_index, model, now)
-            .is_some()
-}
-
-pub(super) fn auth_overlay_index(auth: &AuthRecord) -> String {
-    let auth_index = auth.auth_index.trim();
-    if auth_index.is_empty() {
-        auth.id.clone()
-    } else {
-        auth_index.to_string()
-    }
-}
-
-pub(super) fn snapshot_cooldown_active(auth: &AuthRecord, now: OffsetDateTime) -> bool {
-    auth.cooldown_until
-        .as_deref()
-        .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
-        .map(|deadline| deadline > now)
-        .unwrap_or(false)
 }

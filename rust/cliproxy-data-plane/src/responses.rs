@@ -9,8 +9,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+mod failure;
 mod handler;
+mod health;
 mod protocol;
+mod routing_policy;
 pub(crate) mod sse;
 mod upstream;
 

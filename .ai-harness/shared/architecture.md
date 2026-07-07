@@ -73,8 +73,11 @@
 - `rust/cliproxy-data-plane/src/responses/`
   - Rust `/v1/responses` child modules split by responsibility:
   - `handler.rs` route handler orchestration and plan/bootstrap flow
+  - `failure.rs` typed upstream failure classification shared by retry, cooldown, and recorder paths
+  - `routing_policy.rs` snapshot + overlay candidate filtering and effective-plan resolution
+  - `health.rs` auth/model health recorder and RESP `errors` event emission
   - `protocol.rs` minimal request / stream-event protocol IR for `/v1/responses`, plus Codex-specific request emission compatibility rewrites
-  - `upstream.rs` real upstream execution, request normalization, and auth retry
+  - `upstream.rs` real upstream execution, request normalization, and auth retry orchestration
   - `sse.rs` SSE framing and completed-output repair
 - `rust/cliproxy-data-plane/crates/usage-events/`
   - CPA-shaped usage queue payload type and async producer for non-blocking sinks
