@@ -10,6 +10,8 @@ use cliproxy_usage_events::UsageQueuePayload;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
+use crate::error_events::ErrorEvent;
+
 const USAGE_SUPPORT_REFRESH_PAYLOAD: &str = r#"{"support_refresh":true}"#;
 const USAGE_REFRESH_PAYLOAD: &str = r#"{"refresh":true}"#;
 const SUBSCRIBER_BUFFER: usize = 256;
@@ -60,6 +62,13 @@ impl UsageQueue {
             return;
         }
         inner.items.push_back(payload);
+    }
+
+    pub fn enqueue_error(&self, payload: ErrorEvent) {
+        let Ok(raw) = serde_json::to_vec(&payload) else {
+            return;
+        };
+        self.publish_raw(raw, QueueChannel::Errors);
     }
 
     /// 与 CPA `PopOldest` 对齐：按 FIFO 弹出，弹出即消费。
@@ -222,5 +231,34 @@ mod tests {
         assert_eq!(first[0]["request_id"], "req-1");
         assert_eq!(second[0]["request_id"], "req-2");
         assert!(queue.pop_oldest(1).is_empty());
+    }
+
+    #[tokio::test]
+    async fn subscribe_errors_receives_error_payload() {
+        let queue = UsageQueue::new();
+        let mut subscription = queue.subscribe_errors();
+
+        queue.enqueue_error(ErrorEvent {
+            timestamp: "2026-07-07T00:00:00Z".to_string(),
+            request_id: "req-1".to_string(),
+            provider: "codex".to_string(),
+            model: "gpt-5".to_string(),
+            auth_index: "auth-1".to_string(),
+            scope: crate::error_events::ErrorScope::Auth,
+            status_code: 401,
+            error_code: "authentication_error".to_string(),
+            message: "invalid token".to_string(),
+            retry_after_ms: 0,
+            cooldown_until: String::new(),
+            quota_exceeded: false,
+            reason: "auth_401".to_string(),
+        });
+
+        let payload = subscription.recv().await.expect("error payload");
+        assert!(
+            String::from_utf8(payload)
+                .expect("utf8")
+                .contains("\"error_code\":\"authentication_error\"")
+        );
     }
 }

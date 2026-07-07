@@ -11,6 +11,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Rust data plane consumes Go-exported runtime snapshot by file or HTTP.
 - Rust data plane now aligns milestone 8 with CPA usage-queue semantics instead of exposing a separate Prometheus-style route.
 - Rust data plane accepts HTTP and CPA-compatible Redis RESP usage-consumer traffic on the same TCP listener by sniffing the first connection byte.
+- Rust data plane now also produces real RESP `errors` events for `/v1/responses`, keeps an in-memory auth/model health overlay, and uses that overlay to filter auth candidates plus pre-commit retries.
 - Go CPA now bridges Rust data-plane usage queue records back into CPA `internal/redisqueue` with RESP `SUBSCRIBE usage` first and HTTP pop fallback, so external usage consumers can keep connecting to CPA.
 - Go runtime snapshots include auth `usage_source` for Rust usage attribution, and Rust `/v1/responses` usage payloads include downstream API key attribution when present.
 - Go runtime snapshots also export stable auth `auth_index`, and Rust usage payloads now emit that index instead of raw auth IDs while recording TTFT from the first upstream body chunk.
@@ -44,9 +45,11 @@ This document records durable repository-level state. It is not a per-session ta
   - CPA-compatible in-memory usage queue with subscriber fan-out, `support_refresh` / `refresh` control payloads, and pop semantics
   - HTTP usage queue pop endpoint at `/v0/management/usage-queue`
   - Redis RESP usage protocol support for `AUTH`, `SUBSCRIBE usage/errors`, `LPOP usage`, and `RPOP usage`
+  - real RESP `errors` payload production for `/v1/responses` upstream failures
   - Go-side data-plane usage bridge that subscribes to Rust `usage` over Redis RESP and re-enqueues records into CPA redisqueue, with HTTP pop fallback
   - Go-side bridge auth selection that uses the embedded/local management password first and falls back to `MANAGEMENT_PASSWORD` for external data-plane dev stacks
   - pre-commit auth retry classification for `/v1/responses`
+  - single-node in-memory auth/model health overlay that derives cooldowns from Rust upstream failures and blocks candidate reuse until recovery
   - upstream request/response redaction helpers for logging
   - Codex native Responses array input and extra top-level request fields are preserved through Rust `/v1/responses` upstream normalization
   - Codex request emission compatibility matrix covering forced rewrites, filtered unsupported fields, conditional `service_tier`, `system -> developer`, and web-search builtin tool alias normalization
@@ -83,6 +86,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Test coverage appears stronger in selected areas than for full end-to-end production flows.
 - Some architectural intent lives in docs and current worktree changes, not only in released code.
 - Rust usage queue now exposes the CPA-compatible HTTP and RESP consumption paths, and CPA bridges Rust usage back into the external CPA queue. Home-mode direct Rust `LPUSH usage` forwarding is still not implemented.
+- Rust auth/model health overlay is memory-only and single-process; restart clears overlay state, and there is still no cross-instance synchronization.
 - Rust milestone-6 parity coverage now includes fixture-driven SSE framer checks derived from Go stream-repair samples, including malformed blank-line event/data cases, but it is still not a full Go fixture mirror.
 
 ## Collaboration Boundaries

@@ -73,6 +73,8 @@
   - preserve CPA usage attribution by carrying Go-resolved auth `usage_source` and downstream API key into Rust usage payloads
   - align Codex upstream request compatibility with the Go-native CPA translator for the current Rust `/v1/responses` path
   - expose `/v0/management/usage-queue` and Redis RESP usage-consumer commands for CPA-compatible usage consumption
+  - produce RESP `errors` payloads for Rust `/v1/responses` upstream failures
+  - keep a Rust-local in-memory auth/model health overlay that can temporarily block auth reuse after upstream failures
   - fail `/v1/responses` with a direct upstream error when no real upstream execution path is available
   - consume runtime snapshot from Go
   - expose health / readiness / runtime snapshot observation

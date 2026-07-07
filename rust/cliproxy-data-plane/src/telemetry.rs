@@ -218,6 +218,10 @@ impl RequestTelemetry {
         }
     }
 
+    pub fn error_event_request_id(&self) -> String {
+        self.effective_request_id()
+    }
+
     fn finish(&self, failed: bool, status_code: u16, body: &str) {
         if self
             .state

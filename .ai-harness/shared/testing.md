@@ -32,6 +32,13 @@ Rust route-focused test:
 cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test http_routes
 ```
 
+Rust auth/queue focused tests:
+
+```bash
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml usage_queue::tests::subscribe_errors_receives_error_payload -- --exact
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml auth_state::tests::clears_expired_entries_on_lookup -- --exact
+```
+
 Rust SSE parity test:
 
 ```bash
@@ -132,6 +139,8 @@ cargo test --workspace --manifest-path rust/cliproxy-data-plane/Cargo.toml
   - Go server build verification
 - Rust HTTP / runtime / upstream changes:
   - relevant Rust test target or full workspace test
+- Rust auth health / cooldown / errors-channel changes:
+  - full Rust workspace test or at minimum `http_routes` plus focused queue/auth-state tests
 - Cross-runtime Go->Rust integration changes:
   - relevant Go package tests
   - Rust route/workspace tests
@@ -146,6 +155,7 @@ cargo test --workspace --manifest-path rust/cliproxy-data-plane/Cargo.toml
 - Multi-instance Rust data-plane lifecycle coverage is `待确认`.
 - Some validation currently depends on local manual stack checks and snapshot inspection.
 - Rust SSE parity coverage is better for selected Go stream-repair and malformed-stream samples than before, but the fixture set is still partial rather than exhaustive.
+- Rust auth health overlay currently has unit coverage and route coverage around retry paths, but it is still memory-only and not exercised under multi-process or restart scenarios.
 
 ## If Tests Are Missing
 

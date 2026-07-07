@@ -58,8 +58,12 @@
   - Hold current runtime snapshot and runtime metadata
 - `rust/cliproxy-data-plane/src/http.rs`
   - Rust HTTP routes for health, readiness, snapshot inspection, notify, and `/v1/responses`
+- `rust/cliproxy-data-plane/src/auth_state.rs`
+  - Rust-local in-memory auth/model health overlay used by `/v1/responses` route filtering and retry
+- `rust/cliproxy-data-plane/src/error_events.rs`
+  - RESP `errors` payload contract for Rust upstream failures
 - `rust/cliproxy-data-plane/src/usage_queue.rs`
-  - CPA-compatible in-memory usage queue, subscriber fan-out, refresh control payload, and pop semantics
+  - CPA-compatible in-memory usage queue, subscriber fan-out, refresh control payload, pop semantics, and `errors` event fan-out
 - `rust/cliproxy-data-plane/src/redis_protocol.rs`
   - CPA-compatible Redis RESP usage consumer protocol for `AUTH`, `SUBSCRIBE`, `LPOP`, and `RPOP`
 - `rust/cliproxy-data-plane/src/telemetry.rs`
@@ -88,6 +92,8 @@
   - request -> centralized request metadata extraction -> request IR -> runtime snapshot + router core -> upstream runtime -> stream-event IR + normalized downstream response -> CPA-shaped usage payload emission
   - request metadata now owns shared extraction of `session_id`, `pinned_auth_id`, `reasoning.effort` / fallback `reasoning_effort`, and `service_tier` before routing and telemetry
   - when provider=`Codex`, request IR emission is also the compatibility boundary for forced rewrites (`store=false`, `parallel_tool_calls/include`), filtered unsupported fields (`max_output_tokens`, `context_management`, `truncation`, `user`, etc.), `system -> developer` input-role normalization, and builtin tool alias normalization
+  - before upstream execution, Rust now filters the planned auth chain with snapshot cooldown plus the local auth/model health overlay
+  - pre-commit upstream failures now update the local overlay, publish RESP `errors` payloads, and can cause the next retry candidate to be selected
   - if no real upstream execution path can be constructed, return error immediately instead of synthesizing local mock responses
 - Rust usage-consumption path:
   - `/v1/responses` telemetry -> local CPA-compatible usage queue
@@ -95,6 +101,7 @@
   - TTFT is recorded once at the first observed upstream response byte and must not be overwritten by later chunks or repaired SSE frames
   - HTTP consumers can pop records with `/v0/management/usage-queue?count=N`
   - Redis RESP consumers can use the same TCP listener with `AUTH`, `SUBSCRIBE usage/errors`, and `LPOP/RPOP usage`
+  - `errors` subscribers now receive real Rust upstream failure payloads; only `usage` supports queue pop semantics
 - External CPA usage-consumer path:
   - `cpa-usage-keeper` and other external consumers can continue connecting to CPA
   - when Go routes `/v1/responses` to Rust and usage statistics are enabled, CPA subscribes to Rust `usage` over Redis RESP and writes those records back into CPA `internal/redisqueue`

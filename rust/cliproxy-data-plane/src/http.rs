@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
+use crate::auth_state::AuthStateOverlay;
 use crate::responses::{ResponsesRequest, handle_responses};
 use crate::runtime::{RuntimeInfo, RuntimeStateHandle};
 use crate::telemetry::AppTelemetry;
@@ -30,6 +31,7 @@ struct AppState {
     upstream: UpstreamRuntime,
     telemetry: AppTelemetry,
     usage_queue: UsageQueue,
+    auth_state: AuthStateOverlay,
 }
 
 /// `/healthz` 的轻量健康响应，只反映进程当前服务状态。
@@ -76,6 +78,7 @@ pub fn router_with_snapshot_client(
         upstream,
         snapshot_client,
         UsageQueue::new(),
+        AuthStateOverlay::new(),
     )
 }
 
@@ -84,6 +87,7 @@ pub fn router_with_snapshot_client_and_usage_queue(
     upstream: UpstreamRuntime,
     snapshot_client: Option<RuntimeConfigClient>,
     usage_queue: UsageQueue,
+    auth_state: AuthStateOverlay,
 ) -> Router {
     // HTTP 层只负责暴露固定管理/数据面入口，真正的路由选择在
     // `/v1/responses` 内部再交给 router-core。
@@ -94,6 +98,7 @@ pub fn router_with_snapshot_client_and_usage_queue(
         upstream,
         telemetry: AppTelemetry::new_with_usage_queue(usage_queue.clone()),
         usage_queue,
+        auth_state,
     };
     Router::new()
         .route("/healthz", get(healthz))
@@ -191,6 +196,8 @@ async fn post_responses(
                 state.router_core,
                 state.upstream,
                 state.telemetry,
+                state.usage_queue,
+                state.auth_state,
                 request,
                 request_id,
                 api_key,

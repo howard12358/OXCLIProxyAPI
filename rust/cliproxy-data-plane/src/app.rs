@@ -9,6 +9,7 @@ use hyper_util::{
 use tokio::{net::TcpListener, sync::watch};
 use tracing::{error, info};
 
+use crate::auth_state::AuthStateOverlay;
 use crate::config::Config;
 use crate::http;
 use crate::redis_protocol;
@@ -39,12 +40,14 @@ pub async fn run(config: Config) -> Result<()> {
     let listener = TcpListener::bind(config.bind_addr).await?;
     let local_addr = listener.local_addr()?;
     let usage_queue = UsageQueue::new();
+    let auth_state = AuthStateOverlay::new();
     let redis_auth_password = config.snapshot_bearer_token.clone();
     let app = http::router_with_snapshot_client_and_usage_queue(
         runtime_state,
         upstream_runtime,
         Some(snapshot_client),
         usage_queue.clone(),
+        auth_state,
     );
 
     info!(address = %local_addr, "data plane listening");

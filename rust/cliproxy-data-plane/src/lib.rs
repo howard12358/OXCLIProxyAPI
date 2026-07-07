@@ -1,5 +1,7 @@
 pub mod app;
+pub mod auth_state;
 pub mod config;
+pub mod error_events;
 pub mod http;
 pub mod redis_protocol;
 pub mod responses;

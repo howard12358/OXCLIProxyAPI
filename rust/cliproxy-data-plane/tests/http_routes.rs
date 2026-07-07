@@ -5,6 +5,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use cliproxy_common_types::snapshot::{RoutingStrategy, UsageQueueConfig};
+use cliproxy_data_plane::auth_state::AuthStateOverlay;
 use cliproxy_data_plane::http::{
     router, router_with_snapshot_client, router_with_snapshot_client_and_usage_queue,
 };
@@ -93,6 +94,7 @@ async fn usage_queue_endpoint_pops_requested_records_once() {
         test_upstream(),
         None,
         usage_queue,
+        AuthStateOverlay::new(),
     );
     let response = app
         .oneshot(
@@ -950,6 +952,7 @@ async fn responses_route_usage_payload_includes_source_and_downstream_api_key() 
         test_upstream(),
         None,
         usage_queue.clone(),
+        AuthStateOverlay::new(),
     );
 
     let response = app
@@ -1016,6 +1019,7 @@ async fn responses_route_usage_payload_includes_reasoning_effort_and_service_tie
         test_upstream(),
         None,
         usage_queue.clone(),
+        AuthStateOverlay::new(),
     );
 
     let response = app
