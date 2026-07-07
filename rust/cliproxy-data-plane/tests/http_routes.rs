@@ -764,6 +764,163 @@ async fn responses_route_preserves_codex_native_input_and_extra_fields() {
 }
 
 #[tokio::test]
+async fn responses_route_strips_codex_unsupported_generation_fields() {
+    let upstream_url = spawn_openai_upstream().await;
+    let app = router(
+        test_runtime_with_auths(
+            true,
+            RoutingStrategy::FillFirst,
+            vec![codex_oauth_auth(
+                "auth-codex-a",
+                100,
+                "codex-token-a",
+                "acct_a",
+                Some(&upstream_url),
+            )],
+        ),
+        test_upstream(),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model":"codex-latest",
+                        "stream":true,
+                        "input":"hello from codex",
+                        "max_output_tokens":16,
+                        "max_completion_tokens":24,
+                        "temperature":0.2,
+                        "top_p":0.9,
+                        "service_tier":"default"
+                    })
+                    .to_string(),
+                ))
+                .expect("build request"),
+        )
+        .await
+        .expect("call app");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let text = String::from_utf8(body.to_vec()).expect("valid utf8");
+    let completed_line = text
+        .lines()
+        .find(|line| line.starts_with("data: {\"type\":\"response.completed\""))
+        .expect("completed event");
+    let payload: Value = serde_json::from_str(
+        completed_line
+            .strip_prefix("data: ")
+            .expect("completed payload prefix"),
+    )
+    .expect("parse completed payload");
+    let received = &payload["response"]["received_payload"];
+    assert!(received.get("max_output_tokens").is_none());
+    assert!(received.get("max_completion_tokens").is_none());
+    assert!(received.get("temperature").is_none());
+    assert!(received.get("top_p").is_none());
+    assert!(received.get("service_tier").is_none());
+}
+
+#[tokio::test]
+async fn responses_route_applies_codex_compatibility_rewrites() {
+    let upstream_url = spawn_openai_upstream().await;
+    let app = router(
+        test_runtime_with_auths(
+            true,
+            RoutingStrategy::FillFirst,
+            vec![codex_oauth_auth(
+                "auth-codex-a",
+                100,
+                "codex-token-a",
+                "acct_a",
+                Some(&upstream_url),
+            )],
+        ),
+        test_upstream(),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model":"codex-latest",
+                        "stream":true,
+                        "input":[
+                            {
+                                "type":"message",
+                                "role":"system",
+                                "content":[{"type":"input_text","text":"system prompt"}]
+                            },
+                            {
+                                "type":"message",
+                                "role":"user",
+                                "content":[{"type":"input_text","text":"hello"}]
+                            }
+                        ],
+                        "context_management":[{"type":"compaction","compact_threshold":12000}],
+                        "truncation":"disabled",
+                        "user":"downstream-user",
+                        "tools":[{"type":"web_search_preview_2025_03_11"}],
+                        "tool_choice":{
+                            "type":"allowed_tools",
+                            "tools":[
+                                {"type":"web_search_preview"},
+                                {"type":"web_search_preview_2025_03_11"}
+                            ]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .expect("build request"),
+        )
+        .await
+        .expect("call app");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let text = String::from_utf8(body.to_vec()).expect("valid utf8");
+    let completed_line = text
+        .lines()
+        .find(|line| line.starts_with("data: {\"type\":\"response.completed\""))
+        .expect("completed event");
+    let payload: Value = serde_json::from_str(
+        completed_line
+            .strip_prefix("data: ")
+            .expect("completed payload prefix"),
+    )
+    .expect("parse completed payload");
+    let received = &payload["response"]["received_payload"];
+    assert_eq!(received["parallel_tool_calls"], true);
+    assert_eq!(received["include"], json!(["reasoning.encrypted_content"]));
+    assert!(received.get("context_management").is_none());
+    assert!(received.get("truncation").is_none());
+    assert!(received.get("user").is_none());
+    assert_eq!(received["input"][0]["role"], "developer");
+    assert_eq!(received["tools"][0]["type"], "web_search");
+    assert_eq!(received["tool_choice"]["tools"][0]["type"], "web_search");
+    assert_eq!(received["tool_choice"]["tools"][1]["type"], "web_search");
+}
+
+#[tokio::test]
 async fn responses_route_usage_payload_includes_source_and_downstream_api_key() {
     let upstream_url = spawn_openai_upstream().await;
     let runtime = test_runtime_with_auths(

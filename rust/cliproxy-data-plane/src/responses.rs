@@ -464,6 +464,125 @@ mod tests {
     }
 
     #[test]
+    fn normalize_upstream_request_strips_codex_unsupported_generation_fields() {
+        let request = ResponsesRequest {
+            model: "codex-latest".to_string(),
+            stream: false,
+            input: Some(json!("hello")),
+            instructions: None,
+            metadata: Some(json!({"client":"test"})),
+            store: Some(true),
+            extra: BTreeMap::from([
+                ("max_output_tokens".to_string(), json!(16)),
+                ("max_completion_tokens".to_string(), json!(24)),
+                ("temperature".to_string(), json!(0.2)),
+                ("top_p".to_string(), json!(0.9)),
+                ("service_tier".to_string(), json!("default")),
+            ]),
+        };
+        let plan = ExecutionPlan {
+            provider: cliproxy_common_types::upstream::ProviderKind::Codex,
+            model: "gpt-5-codex".to_string(),
+            auth_id: "auth-1".to_string(),
+            retry_candidates: vec![],
+            stickiness_source: StickinessSource::Strategy,
+        };
+
+        let normalized = upstream::normalize_upstream_request(request, &plan);
+
+        assert!(normalized.extra.get("max_output_tokens").is_none());
+        assert!(normalized.extra.get("max_completion_tokens").is_none());
+        assert!(normalized.extra.get("temperature").is_none());
+        assert!(normalized.extra.get("top_p").is_none());
+        assert!(normalized.extra.get("service_tier").is_none());
+    }
+
+    #[test]
+    fn normalize_upstream_request_applies_codex_compatibility_defaults_and_rewrites() {
+        let request = ResponsesRequest {
+            model: "codex-latest".to_string(),
+            stream: false,
+            input: Some(json!([
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type":"input_text","text":"system prompt"}]
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type":"input_text","text":"hello"}]
+                }
+            ])),
+            instructions: None,
+            metadata: Some(json!({"client":"test"})),
+            store: Some(true),
+            extra: BTreeMap::from([
+                (
+                    "context_management".to_string(),
+                    json!([{"type":"compaction","compact_threshold":12000}]),
+                ),
+                ("truncation".to_string(), json!("disabled")),
+                ("user".to_string(), json!("downstream-user")),
+                (
+                    "tools".to_string(),
+                    json!([
+                        {"type":"web_search_preview_2025_03_11"},
+                        {"type":"function","name":"shell"}
+                    ]),
+                ),
+                (
+                    "tool_choice".to_string(),
+                    json!({
+                        "type":"allowed_tools",
+                        "tools":[
+                            {"type":"web_search_preview"},
+                            {"type":"web_search_preview_2025_03_11"}
+                        ]
+                    }),
+                ),
+            ]),
+        };
+        let plan = ExecutionPlan {
+            provider: cliproxy_common_types::upstream::ProviderKind::Codex,
+            model: "gpt-5-codex".to_string(),
+            auth_id: "auth-1".to_string(),
+            retry_candidates: vec![],
+            stickiness_source: StickinessSource::Strategy,
+        };
+
+        let normalized = upstream::normalize_upstream_request(request, &plan);
+
+        assert_eq!(normalized.store, Some(false));
+        assert!(normalized.metadata.is_none());
+        assert_eq!(
+            normalized.instructions.as_deref(),
+            Some(DEFAULT_CODEX_INSTRUCTIONS)
+        );
+        assert_eq!(normalized.extra["parallel_tool_calls"], json!(true));
+        assert_eq!(
+            normalized.extra["include"],
+            json!(["reasoning.encrypted_content"])
+        );
+        assert!(normalized.extra.get("context_management").is_none());
+        assert!(normalized.extra.get("truncation").is_none());
+        assert!(normalized.extra.get("user").is_none());
+        assert_eq!(
+            normalized.input.as_ref().expect("input")[0]["role"],
+            "developer"
+        );
+        assert_eq!(normalized.extra["tools"][0]["type"], "web_search");
+        assert_eq!(
+            normalized.extra["tool_choice"]["tools"][0]["type"],
+            "web_search"
+        );
+        assert_eq!(
+            normalized.extra["tool_choice"]["tools"][1]["type"],
+            "web_search"
+        );
+    }
+
+    #[test]
     fn request_ir_preserves_non_codex_request_shape() {
         let request = ResponsesRequest {
             model: "gpt-5".to_string(),

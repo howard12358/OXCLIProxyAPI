@@ -54,6 +54,14 @@ impl ResponsesRequestIr {
 
         request.store = Some(false);
         request.metadata = None;
+        request
+            .extra
+            .insert("parallel_tool_calls".to_string(), Value::Bool(true));
+        request.extra.insert(
+            "include".to_string(),
+            json!(["reasoning.encrypted_content"]),
+        );
+        strip_codex_unsupported_fields(&mut request.extra);
 
         if request
             .instructions
@@ -86,11 +94,109 @@ impl ResponsesRequestIr {
             }
         }
 
+        normalize_codex_input_roles(request.input.as_mut());
+        normalize_codex_builtin_tools(&mut request.extra);
+
         request
     }
 
     pub(super) fn model(&self) -> &str {
         &self.model
+    }
+}
+
+/// Codex `/responses` 当前不接受部分 OpenAI Responses 通用字段。
+///
+/// 这里保持和 Go 原生 CPA 的 Codex request normalize 一致，只在
+/// provider=Codex 的发射边界做最小兼容删除，避免把下游通用字段原样透传后
+/// 触发上游 400。
+fn strip_codex_unsupported_fields(extra: &mut BTreeMap<String, Value>) {
+    extra.remove("max_output_tokens");
+    extra.remove("max_completion_tokens");
+    extra.remove("temperature");
+    extra.remove("top_p");
+    extra.remove("truncation");
+    extra.remove("context_management");
+    extra.remove("user");
+
+    if extra
+        .get("service_tier")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        != Some("priority")
+    {
+        extra.remove("service_tier");
+    }
+}
+
+/// Codex upstream 不接受 Responses 输入数组里的 `system` role。
+///
+/// 这里与 Go 原生 translator 保持一致，只把 message item 的 `system`
+/// 改写成 `developer`，其他 role 和 item 形态保持原样。
+fn normalize_codex_input_roles(input: Option<&mut Value>) {
+    let Some(Value::Array(items)) = input else {
+        return;
+    };
+
+    for item in items {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        let role = object.get("role").and_then(Value::as_str).map(str::trim);
+        if role == Some("system") {
+            object.insert("role".to_string(), Value::String("developer".to_string()));
+        }
+    }
+}
+
+/// Codex 当前已知会把部分 preview builtin tool 名称视为旧别名。
+///
+/// 这里在 request emit 边界统一做兼容归一化，避免把 provider 兼容逻辑散落到
+/// handler 或 upstream 层。
+fn normalize_codex_builtin_tools(extra: &mut BTreeMap<String, Value>) {
+    if let Some(Value::Array(tools)) = extra.get_mut("tools") {
+        for tool in tools {
+            normalize_codex_builtin_tool_value(tool);
+        }
+    }
+
+    if let Some(tool_choice) = extra.get_mut("tool_choice") {
+        normalize_codex_builtin_tool_choice(tool_choice);
+    }
+}
+
+fn normalize_codex_builtin_tool_choice(tool_choice: &mut Value) {
+    normalize_codex_builtin_tool_value(tool_choice);
+
+    let Some(object) = tool_choice.as_object_mut() else {
+        return;
+    };
+    let Some(Value::Array(tools)) = object.get_mut("tools") else {
+        return;
+    };
+    for tool in tools {
+        normalize_codex_builtin_tool_value(tool);
+    }
+}
+
+fn normalize_codex_builtin_tool_value(value: &mut Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    let Some(raw_type) = object.get("type").and_then(Value::as_str) else {
+        return;
+    };
+    let normalized = normalize_codex_builtin_tool_type(raw_type);
+    if normalized == raw_type {
+        return;
+    }
+    object.insert("type".to_string(), Value::String(normalized.to_string()));
+}
+
+fn normalize_codex_builtin_tool_type(tool_type: &str) -> &str {
+    match tool_type {
+        "web_search_preview" | "web_search_preview_2025_03_11" => "web_search",
+        other => other,
     }
 }
 
