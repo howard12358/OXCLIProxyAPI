@@ -3,10 +3,10 @@ name: docker-embedded-image
 on:
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: Docker image tag to publish
+      release_base:
+        description: Release base version; workflow auto-increments patch, e.g. v0.0
         required: true
-        default: v0.0.1
+        default: v0.0
       dockerhub_namespace:
         description: Docker Hub namespace; empty uses DOCKERHUB_USERNAME secret
         required: false
@@ -31,6 +31,10 @@ on:
 
 env:
   IMAGE_NAME: ox-cli-proxy-api
+
+concurrency:
+  group: docker-embedded-image-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   docker_embedded:
@@ -57,13 +61,64 @@ jobs:
       - name: Generate Build Metadata
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
+          set -euo pipefail
+
           namespace="${{ inputs.dockerhub_namespace }}"
           if [ -z "${namespace}" ]; then
             namespace="${DOCKERHUB_USERNAME}"
           fi
-          echo "DOCKERHUB_REPO=${namespace}/${IMAGE_NAME}" >> "$GITHUB_ENV"
-          echo "VERSION=${{ inputs.image_tag }}" >> "$GITHUB_ENV"
+
+          release_base="${{ inputs.release_base }}"
+          if ! printf '%s' "${release_base}" | grep -Eq '^v[0-9]+\.[0-9]+$'; then
+            echo "release_base must look like v<major>.<minor>, for example v0.0" >&2
+            exit 1
+          fi
+
+          repo="${namespace}/${IMAGE_NAME}"
+          repo_name="${repo#*/}"
+          version_pattern="^${release_base//./\\.}\\.([0-9]+)(-debug)?$"
+
+          token="$(
+            curl -fsSL \
+              -H 'Content-Type: application/json' \
+              -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_TOKEN}\"}" \
+              'https://hub.docker.com/v2/users/login/' \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
+          )"
+
+          next_patch="$(
+            TAGS_JSON="$(
+              if ! curl -fsSL \
+                -H "Authorization: JWT ${token}" \
+                "https://hub.docker.com/v2/repositories/${namespace}/${repo_name}/tags/?page_size=1000"; then
+                echo '{"results":[]}'
+              fi
+            )" \
+            VERSION_PATTERN="${version_pattern}" \
+            python3 -c 'import json, os, re; payload = json.loads(os.environ["TAGS_JSON"]); pattern = re.compile(os.environ["VERSION_PATTERN"]); max_patch = max((int(match.group(1)) for item in payload.get("results", []) for match in [pattern.match(item.get("name", ""))] if match), default=-1); print(max_patch + 1)'
+          )"
+
+          version="${release_base}.${next_patch}"
+          latest_tag=""
+          if [ "${{ inputs.rust_profile }}" = "debug" ]; then
+            version="${version}-debug"
+          elif [ "${{ inputs.push }}" = "true" ]; then
+            latest_tag="${repo}:latest"
+          fi
+
+          echo "DOCKERHUB_REPO=${repo}" >> "$GITHUB_ENV"
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+          echo "LATEST_TAG=${latest_tag}" >> "$GITHUB_ENV"
+          {
+            echo "IMAGE_TAGS<<EOF"
+            echo "${repo}:${version}"
+            if [ -n "${latest_tag}" ]; then
+              echo "${latest_tag}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_ENV"
           echo "COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
@@ -82,5 +137,4 @@ jobs:
             RUST_PROFILE=${{ inputs.rust_profile }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          tags: |
-            ${{ env.DOCKERHUB_REPO }}:${{ inputs.image_tag }}
+          tags: ${{ env.IMAGE_TAGS }}

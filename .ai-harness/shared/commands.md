@@ -120,9 +120,9 @@ docker build -f Dockerfile.embedded -t rustyllh/ox-cli-proxy-api:embedded .
 Manual CI workflow:
 
 ```bash
-gh workflow run docker-embedded-image.yml -f image_tag=v0.0.1 -f platforms=linux/amd64,linux/arm64 -f push=true
-gh workflow run docker-embedded-image.yml -f dockerhub_namespace=<namespace> -f image_tag=v0.0.1 -f platforms=linux/amd64,linux/arm64 -f push=true
-gh workflow run docker-embedded-image.yml -f image_tag=v0.0.2-debug -f platforms=linux/amd64 -f rust_profile=debug -f push=true
+gh workflow run docker-embedded-image.yml -f release_base=v0.0 -f platforms=linux/amd64,linux/arm64 -f push=true
+gh workflow run docker-embedded-image.yml -f dockerhub_namespace=<namespace> -f release_base=v0.0 -f platforms=linux/amd64,linux/arm64 -f push=true
+gh workflow run docker-embedded-image.yml -f release_base=v0.0 -f platforms=linux/amd64 -f rust_profile=debug -f push=true
 ```
 
 Compose:
