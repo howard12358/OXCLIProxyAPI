@@ -108,7 +108,7 @@ docker compose down
 - Rust data plane 文件日志会写入 `./logs/data-plane/`，同时也会镜像到 `docker logs`
 - `/v1/responses` 不需要再单独准备外部 Rust 进程
 - 如果要用本地源码构建镜像，请执行 `./docker-build.sh`
-- 最小生产部署路径见 [docs/embedded-production-deployment.md](docs/embedded-production-deployment.md)
+- 最小生产部署路径见 [docs/operations/embedded-production-deployment.md](docs/operations/embedded-production-deployment.md)
 
 ## 管理 API 文档
 

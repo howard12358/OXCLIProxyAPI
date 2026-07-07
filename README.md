@@ -107,7 +107,7 @@ Notes:
 - Rust data-plane file logs are written under `./logs/data-plane/`, and the same output is mirrored into `docker logs`
 - no separate external Rust process is required for `/v1/responses`
 - if you want to build from local source instead, run `./docker-build.sh`
-- for the minimal production path, see [docs/embedded-production-deployment.md](docs/embedded-production-deployment.md)
+- for the minimal production path, see [docs/operations/embedded-production-deployment.md](docs/operations/embedded-production-deployment.md)
 
 ## Management API
 
