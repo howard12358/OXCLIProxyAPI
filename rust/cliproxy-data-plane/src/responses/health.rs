@@ -28,7 +28,9 @@ impl HealthRecorder {
     /// 这里保留与上一版一致的粗粒度语义：一次成功会同时清除 auth 级和该 model 级冷却，
     /// 不区分“部分恢复”与“完全恢复”。
     pub(super) fn record_success(&self, auth: &AuthRecord, model: &str) {
-        let auth_key = AuthKey::from_auth_record(auth);
+        let Some(auth_key) = AuthKey::from_auth_record(auth) else {
+            return;
+        };
         let Some(model_key) = ModelKey::new(auth_key, model) else {
             return;
         };
@@ -99,7 +101,7 @@ impl RecordedFailure {
         request_id: String,
         classification: ClassifiedUpstreamFailure,
     ) -> Option<Self> {
-        let auth_key = AuthKey::from_auth_record(auth);
+        let auth_key = AuthKey::from_auth_record(auth)?;
         let model_key = ModelKey::new(auth_key.clone(), model)?;
         let cooldown_until = classification
             .kind

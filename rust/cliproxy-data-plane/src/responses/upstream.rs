@@ -21,11 +21,15 @@ use crate::{
 use super::failure::classify_upstream_failure;
 use super::health::{HealthRecorder, RecordedFailure};
 use super::protocol::ResponsesRequestIr;
-use super::routing_policy::auth_retry_chain;
 use super::sse::{ResponsesSseFramer, extract_completed_response_from_sse};
 use super::{
     ResponsesRequest, response_from_aggregated_json_body, response_from_body, response_with_stream,
 };
+
+struct UpstreamExecutionOutcome {
+    response: UpstreamExecutionResult,
+    successful_auth: Option<AuthRecord>,
+}
 
 /// 在路由已经选定 model/auth 后，执行真实上游请求链路。
 ///
@@ -65,7 +69,7 @@ pub(super) async fn execute_real_upstream(
         body: request_body,
         stream: upstream_request.stream,
     };
-    let upstream_result = execute_upstream_with_retries(
+    let upstream_outcome = execute_upstream_with_retries(
         &upstream,
         snapshot,
         execution_plan,
@@ -78,11 +82,11 @@ pub(super) async fn execute_real_upstream(
     )
     .await?;
 
-    match upstream_result {
+    match upstream_outcome.response {
         UpstreamExecutionResult::NonStreaming(response) => {
             let _provider = response.provider;
             let _events = response.events;
-            if let Some(auth) = selected_auth {
+            if let Some(auth) = upstream_outcome.successful_auth.as_ref() {
                 health_recorder.record_success(auth, &execution_plan.model);
             }
             telemetry.observe_response_headers(&response.head.headers);
@@ -95,7 +99,7 @@ pub(super) async fn execute_real_upstream(
             if aggregate_codex_stream {
                 let _provider = response.provider;
                 let _events = response.events;
-                if let Some(auth) = selected_auth {
+                if let Some(auth) = upstream_outcome.successful_auth.as_ref() {
                     health_recorder.record_success(auth, &execution_plan.model);
                 }
                 telemetry.observe_response_headers(&response.head.headers);
@@ -115,7 +119,7 @@ pub(super) async fn execute_real_upstream(
             }
             let _provider = response.provider;
             let _events = response.events;
-            if let Some(auth) = selected_auth {
+            if let Some(auth) = upstream_outcome.successful_auth.as_ref() {
                 health_recorder.record_success(auth, &execution_plan.model);
             }
             telemetry.observe_response_headers(&response.head.headers);
@@ -176,26 +180,28 @@ async fn execute_upstream_with_retries(
     telemetry: &RequestTelemetry,
     usage_queue: &UsageQueue,
     auth_state: &AuthStateOverlay,
-) -> Result<UpstreamExecutionResult> {
+) -> Result<UpstreamExecutionOutcome> {
     let health_recorder = HealthRecorder::new(auth_state.clone(), usage_queue.clone());
     if let Some(auth) = selected_auth {
         if upstream.can_execute_for_auth(auth) {
             let mut last_error = None;
             // 只有在下游响应还没提交时，才允许在 auth 绑定链内继续重试。
-            for candidate in auth_retry_chain(snapshot, execution_plan)
-                .into_iter()
-                .flatten()
-            {
+            for candidate in auth_bound_retry_chain(snapshot, execution_plan, auth) {
                 match upstream
-                    .execute_responses_for_auth(candidate, request.clone(), proxy_override)
+                    .execute_responses_for_auth(&candidate, request.clone(), proxy_override)
                     .await
                 {
-                    Ok(response) => return Ok(response),
+                    Ok(response) => {
+                        return Ok(UpstreamExecutionOutcome {
+                            response,
+                            successful_auth: Some(candidate),
+                        });
+                    }
                     Err(err) if should_retry_auth_bound_error(&err) => {
                         let classification = classify_upstream_failure(&err);
                         let reason = classification.kind.reason();
                         if let Some(failure) = RecordedFailure::new(
-                            candidate,
+                            &candidate,
                             &execution_plan.model,
                             telemetry.error_event_request_id(),
                             classification,
@@ -215,7 +221,7 @@ async fn execute_upstream_with_retries(
                     Err(err) => {
                         let classification = classify_upstream_failure(&err);
                         if let Some(failure) = RecordedFailure::new(
-                            candidate,
+                            &candidate,
                             &execution_plan.model,
                             telemetry.error_event_request_id(),
                             classification.clone(),
@@ -233,13 +239,38 @@ async fn execute_upstream_with_retries(
         } else {
             return upstream
                 .execute_responses(request.clone(), proxy_override)
-                .await;
+                .await
+                .map(|response| UpstreamExecutionOutcome {
+                    response,
+                    successful_auth: None,
+                });
         }
     }
 
     upstream
         .execute_responses(request.clone(), proxy_override)
         .await
+        .map(|response| UpstreamExecutionOutcome {
+            response,
+            successful_auth: None,
+        })
+}
+
+pub(super) fn auth_bound_retry_chain(
+    snapshot: &RuntimeSnapshot,
+    execution_plan: &ExecutionPlan,
+    selected_auth: &AuthRecord,
+) -> Vec<AuthRecord> {
+    let mut chain = vec![selected_auth.clone()];
+    for auth_id in &execution_plan.retry_candidates {
+        if auth_id == &selected_auth.id {
+            continue;
+        }
+        if let Some(auth) = snapshot.auth_pool.iter().find(|auth| auth.id == *auth_id) {
+            chain.push(auth.clone());
+        }
+    }
+    chain
 }
 
 pub(super) fn log_upstream_failure(err: &anyhow::Error, execution_plan: &ExecutionPlan) {

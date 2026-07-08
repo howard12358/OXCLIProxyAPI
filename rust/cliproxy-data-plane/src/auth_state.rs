@@ -33,10 +33,8 @@ impl AuthKey {
         (!value.is_empty()).then(|| Self(value.to_string()))
     }
 
-    pub fn from_auth_record(auth: &AuthRecord) -> Self {
-        Self::new(auth.auth_index.trim())
-            .or_else(|| Self::new(auth.id.trim()))
-            .expect("auth record must have auth_index or id")
+    pub fn from_auth_record(auth: &AuthRecord) -> Option<Self> {
+        Self::new(auth.auth_index.trim()).or_else(|| Self::new(auth.id.trim()))
     }
 
     pub fn as_str(&self) -> &str {
@@ -214,6 +212,20 @@ mod tests {
             ..AuthRecord::default()
         };
 
-        assert_eq!(AuthKey::from_auth_record(&auth).as_str(), "auth-index");
+        assert_eq!(
+            AuthKey::from_auth_record(&auth).expect("auth key").as_str(),
+            "auth-index"
+        );
+    }
+
+    #[test]
+    fn auth_key_returns_none_when_auth_record_has_no_stable_identity() {
+        let auth = AuthRecord {
+            id: " ".to_string(),
+            auth_index: " ".to_string(),
+            ..AuthRecord::default()
+        };
+
+        assert!(AuthKey::from_auth_record(&auth).is_none());
     }
 }

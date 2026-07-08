@@ -794,6 +794,43 @@ mod tests {
     }
 
     #[test]
+    fn auth_bound_retry_chain_keeps_selected_auth_when_snapshot_primary_is_missing() {
+        let selected_auth = cliproxy_common_types::snapshot::AuthRecord {
+            id: "selected-auth".to_string(),
+            auth_index: "selected-auth-index".to_string(),
+            provider: "codex".to_string(),
+            auth_kind: "oauth".to_string(),
+            enabled: true,
+            ..cliproxy_common_types::snapshot::AuthRecord::default()
+        };
+        let retry_auth = cliproxy_common_types::snapshot::AuthRecord {
+            id: "retry-auth".to_string(),
+            auth_index: "retry-auth-index".to_string(),
+            provider: "codex".to_string(),
+            auth_kind: "oauth".to_string(),
+            enabled: true,
+            ..cliproxy_common_types::snapshot::AuthRecord::default()
+        };
+        let snapshot = cliproxy_common_types::snapshot::RuntimeSnapshot {
+            auth_pool: vec![retry_auth.clone()],
+            ..cliproxy_common_types::snapshot::RuntimeSnapshot::default()
+        };
+        let plan = cliproxy_common_types::routing::ExecutionPlan {
+            provider: cliproxy_common_types::upstream::ProviderKind::Codex,
+            model: "gpt-5-codex".to_string(),
+            auth_id: selected_auth.id.clone(),
+            retry_candidates: vec![retry_auth.id.clone()],
+            stickiness_source: StickinessSource::Strategy,
+        };
+
+        let chain = upstream::auth_bound_retry_chain(&snapshot, &plan, &selected_auth);
+
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].id, "selected-auth");
+        assert_eq!(chain[1].id, "retry-auth");
+    }
+
+    #[test]
     fn sse_framer_reassembles_split_event_and_data_chunks() {
         let mut framer = sse::ResponsesSseFramer::default();
 

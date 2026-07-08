@@ -5,7 +5,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use cliproxy_common_types::snapshot::{RoutingStrategy, UsageQueueConfig};
-use cliproxy_data_plane::auth_state::AuthStateOverlay;
+use cliproxy_data_plane::auth_state::{AuthKey, AuthStateOverlay};
 use cliproxy_data_plane::http::{
     router, router_with_snapshot_client, router_with_snapshot_client_and_usage_queue,
 };
@@ -1174,6 +1174,65 @@ async fn responses_route_retries_next_auth_after_retryable_codex_failure() {
     assert_eq!(payload["auth"], "Bearer codex-token-b");
     assert_eq!(payload["object"], "response");
     assert_eq!(payload["status"], "completed");
+}
+
+#[tokio::test]
+async fn responses_route_keeps_failed_primary_auth_in_cooldown_after_successful_failover() {
+    let upstream_url = spawn_codex_failover_upstream().await;
+    let runtime = test_runtime_with_auths(
+        true,
+        RoutingStrategy::FillFirst,
+        vec![
+            codex_oauth_auth(
+                "auth-codex-a",
+                100,
+                "codex-token-a",
+                "acct_a",
+                Some(&upstream_url),
+            ),
+            codex_oauth_auth(
+                "auth-codex-b",
+                100,
+                "codex-token-b",
+                "acct_b",
+                Some(&upstream_url),
+            ),
+        ],
+    );
+    let auth_state = AuthStateOverlay::new();
+    let app = router_with_snapshot_client_and_usage_queue(
+        runtime,
+        test_upstream(),
+        None,
+        UsageQueue::new(),
+        auth_state.clone(),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model":"codex-latest",
+                        "stream":false,
+                        "input":"retry please"
+                    })
+                    .to_string(),
+                ))
+                .expect("build request"),
+        )
+        .await
+        .expect("call app");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let blocked_until = auth_state.auth_blocked_until(
+        &AuthKey::new("auth-codex-a-index").expect("auth key"),
+        time::OffsetDateTime::now_utc(),
+    );
+    assert!(blocked_until.is_some());
 }
 
 #[tokio::test]

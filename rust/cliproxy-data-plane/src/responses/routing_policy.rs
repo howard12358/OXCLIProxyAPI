@@ -77,7 +77,9 @@ fn auth_blocked(
     if snapshot_cooldown_active(auth, now) {
         return true;
     }
-    let auth_key = AuthKey::from_auth_record(auth);
+    let Some(auth_key) = AuthKey::from_auth_record(auth) else {
+        return false;
+    };
     let Some(model_key) = ModelKey::new(auth_key.clone(), model) else {
         return auth_state.auth_blocked_until(&auth_key, now).is_some();
     };
