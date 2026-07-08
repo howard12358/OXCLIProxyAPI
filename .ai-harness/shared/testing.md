@@ -45,6 +45,55 @@ Rust SSE parity test:
 cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml responses::tests::sse_framer_matches_go_parity_fixtures -- --exact
 ```
 
+Cross-runtime snapshot contract tests:
+
+```bash
+go test ./internal/dataplane/snapshot -run TestBuildRuntimeSnapshotGolden -count=1
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract
+```
+
+Rust SSE contract tests:
+
+```bash
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract sse_golden
+```
+
+Rust auth retry contract tests:
+
+```bash
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract auth_retry
+```
+
+Rust `/v1/responses` golden contract tests:
+
+```bash
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract responses_golden
+```
+
+Rust `/v1/responses` stream abort contract tests:
+
+```bash
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract stream_abort
+```
+
+Go-native `/v1/responses` golden contract test:
+
+```bash
+go test ./sdk/api/handlers/openai -run TestOpenAIResponsesNativeCodexMatchesSharedGoldenFixture -count=1
+```
+
+Rust usage queue contract tests:
+
+```bash
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract usage_queue
+```
+
+Go data-plane proxy and usage bridge tests:
+
+```bash
+go test ./internal/api -run 'TestDataPlaneUsageBridge|TestResponsesRouteProxiesToDataPlaneWhenConfigured|TestCodexDirectResponsesRouteProxiesToDataPlaneWhenConfigured|TestResponsesRouteUsesUpdatedRuntimeDataPlaneBaseURL' -count=1
+```
+
 ## Manual Validation
 
 - Start Go/Rust local stack:
@@ -53,11 +102,7 @@ cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml responses::tests:
 make dev-stack
 ```
 
-or:
-
-```bash
-make dev-stack-url
-```
+This is the preferred local validation path because it exercises the embedded Rust data-plane lifecycle used by production-like deployments.
 
 - Check Go health:
 
@@ -88,12 +133,6 @@ curl http://127.0.0.1:4100/v0/runtime/snapshot
 
 ```bash
 make diff-snapshots
-```
-
-- Smoke `/v1/responses`:
-
-```bash
-make test-responses
 ```
 
 - Production-style embedded smoke:
@@ -139,12 +178,17 @@ cargo test --workspace --manifest-path rust/cliproxy-data-plane/Cargo.toml
   - Go server build verification
 - Rust HTTP / runtime / upstream changes:
   - relevant Rust test target or full workspace test
+  - SSE framing/repair changes should also run `cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract sse_golden`
+  - `/v1/responses` output-shape changes should also run `cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract responses_golden`
 - Rust auth health / cooldown / errors-channel changes:
   - full Rust workspace test or at minimum `http_routes` plus focused queue/auth-state tests
+  - auth retry/cooldown semantic changes should also run `cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract auth_retry`
 - Cross-runtime Go->Rust integration changes:
   - relevant Go package tests
   - Rust route/workspace tests
-  - manual `make dev-stack` or `make dev-stack-url` verification when practical
+  - snapshot-boundary changes should also run the shared Go/Rust snapshot contract tests
+  - usage bridge or Rust usage queue protocol changes should also run the Rust usage queue contract tests and Go data-plane usage bridge tests
+  - manual `make dev-stack` verification first when practical
 - Deployment / embedded runtime verification changes:
   - syntax-check or dry-run the smoke script when changed
   - run `./scripts/embedded-smoke.sh` against a real embedded deployment when practical
@@ -154,7 +198,9 @@ cargo test --workspace --manifest-path rust/cliproxy-data-plane/Cargo.toml
 - Full provider behavior matrix is broad; not every path is likely covered equally.
 - Multi-instance Rust data-plane lifecycle coverage is `待确认`.
 - Some validation currently depends on local manual stack checks and snapshot inspection.
-- Rust SSE parity coverage is better for selected Go stream-repair and malformed-stream samples than before, but the fixture set is still partial rather than exhaustive.
+- The shared runtime snapshot contract fixtures currently cover Go exporter -> Rust parse/validate only; they do not yet cover schema version migration or broader negative fixtures.
+- The `/v1/responses` shared golden fixture now pins a Go-native Codex executor path and the Rust data-plane path against the same request/response contract; broader provider and streaming golden coverage is still partial.
+- Rust `/v1/responses` stream abort coverage now exercises both the streaming downstream path and the aggregate (stream=false over Codex SSE) path when the upstream connection drops mid-stream; the scenario matrix remains partial.
 - Rust auth health overlay currently has unit coverage and route coverage around retry paths, but it is still memory-only and not exercised under multi-process or restart scenarios.
 
 ## If Tests Are Missing
