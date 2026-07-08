@@ -1,0 +1,4 @@
+{
+  "upstream_body": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-stream-1\",\"status\":\"in_progress\"}}\n\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc-1\",\"call_id\":\"call-1\",\"name\":\"shell\",\"arguments\":\"{}\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-stream-1\",\"output\":[]}}",
+  "expected_body": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-stream-1\",\"status\":\"in_progress\"}}\n\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc-1\",\"call_id\":\"call-1\",\"name\":\"shell\",\"arguments\":\"{}\"}}\n\ndata: {\"response\":{\"id\":\"resp-stream-1\",\"output\":[{\"arguments\":\"{}\",\"call_id\":\"call-1\",\"id\":\"fc-1\",\"name\":\"shell\",\"type\":\"function_call\"}]},\"type\":\"response.completed\"}"
+}

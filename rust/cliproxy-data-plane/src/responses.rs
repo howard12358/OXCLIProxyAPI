@@ -19,8 +19,6 @@ mod upstream;
 
 pub use handler::handle_responses;
 
-const DEFAULT_CODEX_INSTRUCTIONS: &str = "You are Codex. Fulfill the user's request.";
-
 /// `/v1/responses` 入口当前接受的下游请求结构。
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ResponsesRequest {
@@ -327,14 +325,12 @@ mod tests {
 
         let normalized = upstream::normalize_upstream_request(request, &plan);
         assert_eq!(normalized.store, Some(false));
-        assert_eq!(
-            normalized.instructions.as_deref(),
-            Some(DEFAULT_CODEX_INSTRUCTIONS)
-        );
+        assert_eq!(normalized.instructions.as_deref(), Some(""));
         assert_eq!(
             normalized.input,
             Some(json!([
                 {
+                    "type": "message",
                     "role": "user",
                     "content": [
                         {
@@ -398,15 +394,13 @@ mod tests {
         assert_eq!(emitted.model, "gpt-5.5");
         assert_eq!(emitted.stream, request.stream);
         assert_eq!(emitted.store, Some(false));
-        assert_eq!(
-            emitted.instructions.as_deref(),
-            Some(DEFAULT_CODEX_INSTRUCTIONS)
-        );
+        assert_eq!(emitted.instructions.as_deref(), Some(""));
         assert!(emitted.metadata.is_none());
         assert_eq!(
             emitted.input,
             Some(json!([
                 {
+                    "type": "message",
                     "role": "user",
                     "content": [
                         {
@@ -558,10 +552,7 @@ mod tests {
 
         assert_eq!(normalized.store, Some(false));
         assert!(normalized.metadata.is_none());
-        assert_eq!(
-            normalized.instructions.as_deref(),
-            Some(DEFAULT_CODEX_INSTRUCTIONS)
-        );
+        assert_eq!(normalized.instructions.as_deref(), Some(""));
         assert_eq!(normalized.extra["parallel_tool_calls"], json!(true));
         assert_eq!(
             normalized.extra["include"],

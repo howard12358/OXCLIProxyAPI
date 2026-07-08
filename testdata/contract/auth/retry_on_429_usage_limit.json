@@ -1,0 +1,14 @@
+{
+  "first_status": 429,
+  "first_body": {
+    "error": {
+      "type": "usage_limit_reached",
+      "message": "The usage limit has been reached",
+      "plan_type": "free",
+      "resets_in_seconds": 900
+    }
+  },
+  "expected_auth": "Bearer codex-token-b",
+  "cooldown_scope": "model",
+  "expect_second_request_skips_primary": true
+}

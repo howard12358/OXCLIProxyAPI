@@ -1,0 +1,14 @@
+{
+  "description": "Upstream SSE stream aborts after emitting response.created but before response.completed.",
+  "request": {
+    "model": "codex-latest",
+    "stream": true,
+    "input": "hello"
+  },
+  "partial_upstream_body": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-abort-1\",\"status\":\"in_progress\"}}\n\n",
+  "expected_status": 200,
+  "expected_events": [
+    "response.created",
+    "response.error"
+  ]
+}

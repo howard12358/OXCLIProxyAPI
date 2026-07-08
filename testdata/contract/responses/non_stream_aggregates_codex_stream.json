@@ -1,0 +1,49 @@
+{
+  "request": {
+    "model": "codex-latest",
+    "stream": false,
+    "input": "aggregate this"
+  },
+  "expected_response": {
+    "account_id": "acct_a",
+    "auth": "Bearer codex-token-a",
+    "id": "resp-stream-1",
+    "model": "gpt-5-codex",
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "text": "stream ok",
+            "type": "output_text"
+          }
+        ],
+        "role": "assistant",
+        "type": "message"
+      }
+    ],
+    "provider": "openai",
+    "received_payload": {
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "input": [
+        {
+          "content": [
+            {
+              "text": "aggregate this",
+              "type": "input_text"
+            }
+          ],
+          "role": "user",
+          "type": "message"
+        }
+      ],
+      "instructions": "",
+      "model": "gpt-5-codex",
+      "store": false,
+      "stream": true
+    },
+    "status": "completed"
+  }
+}

@@ -680,8 +680,9 @@ async fn responses_route_normalizes_codex_payload_for_upstream() {
         received["instructions"]
             .as_str()
             .expect("instructions string"),
-        "You are Codex. Fulfill the user's request."
+        ""
     );
+    assert_eq!(received["input"][0]["type"], "message");
     assert_eq!(received["input"][0]["role"], "user");
     assert_eq!(received["input"][0]["content"][0]["type"], "input_text");
     assert_eq!(

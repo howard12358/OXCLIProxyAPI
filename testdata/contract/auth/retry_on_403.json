@@ -1,0 +1,13 @@
+{
+  "first_status": 403,
+  "first_body": {
+    "error": {
+      "message": "account deactivated",
+      "type": "invalid_request_error",
+      "code": "account_deactivated"
+    }
+  },
+  "expected_auth": "Bearer codex-token-b",
+  "cooldown_scope": "auth",
+  "expect_second_request_skips_primary": true
+}

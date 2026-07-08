@@ -1,0 +1,4 @@
+{
+  "upstream_body": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-stream-2\",\"status\":\"in_progress\"}}\n\nevent: response.output_text.delta\ndata: not-json-delta\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-stream-2\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}]}}\n\ndata: [DONE]\n\n",
+  "expected_body": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-stream-2\",\"status\":\"in_progress\"}}\n\nevent: response.output_text.delta\ndata: not-json-delta\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-stream-2\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}]}}\n\ndata: [DONE]"
+}

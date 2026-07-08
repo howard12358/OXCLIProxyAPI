@@ -4,7 +4,7 @@ use cliproxy_common_types::upstream::ProviderKind;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-use super::{DEFAULT_CODEX_INSTRUCTIONS, ResponsesRequest, sse::sse_data_payload};
+use super::{ResponsesRequest, sse::sse_data_payload};
 
 /// 当前 `/v1/responses` 链路使用的最小规范化请求形态。
 ///
@@ -54,9 +54,6 @@ impl ResponsesRequestIr {
 
         request.store = Some(false);
         request.metadata = None;
-        request
-            .extra
-            .insert("parallel_tool_calls".to_string(), Value::Bool(true));
         request.extra.insert(
             "include".to_string(),
             json!(["reasoning.encrypted_content"]),
@@ -70,7 +67,7 @@ impl ResponsesRequestIr {
             .filter(|value| !value.is_empty())
             .is_none()
         {
-            request.instructions = Some(DEFAULT_CODEX_INSTRUCTIONS.to_string());
+            request.instructions = Some(String::new());
         }
 
         // 兼容性约束：Codex CLI 新版本会直接发送 Responses 原生数组 input。
@@ -79,6 +76,7 @@ impl ResponsesRequestIr {
             Some(Value::String(text)) => {
                 request.input = Some(json!([
                     {
+                        "type": "message",
                         "role": "user",
                         "content": [
                             {
@@ -96,6 +94,7 @@ impl ResponsesRequestIr {
 
         normalize_codex_input_roles(request.input.as_mut());
         normalize_codex_builtin_tools(&mut request.extra);
+        normalize_codex_parallel_tool_calls_for_tools(&mut request.extra);
 
         request
     }
@@ -163,6 +162,18 @@ fn normalize_codex_builtin_tools(extra: &mut BTreeMap<String, Value>) {
     if let Some(tool_choice) = extra.get_mut("tool_choice") {
         normalize_codex_builtin_tool_choice(tool_choice);
     }
+}
+
+fn normalize_codex_parallel_tool_calls_for_tools(extra: &mut BTreeMap<String, Value>) {
+    let has_tools = extra
+        .get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| !tools.is_empty());
+    if has_tools {
+        extra.insert("parallel_tool_calls".to_string(), Value::Bool(true));
+        return;
+    }
+    extra.remove("parallel_tool_calls");
 }
 
 fn normalize_codex_builtin_tool_choice(tool_choice: &mut Value) {

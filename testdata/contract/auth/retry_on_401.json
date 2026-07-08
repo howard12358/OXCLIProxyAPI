@@ -1,0 +1,13 @@
+{
+  "first_status": 401,
+  "first_body": {
+    "error": {
+      "message": "invalid api key",
+      "type": "invalid_request_error",
+      "code": "invalid_api_key"
+    }
+  },
+  "expected_auth": "Bearer codex-token-b",
+  "cooldown_scope": "auth",
+  "expect_second_request_skips_primary": true
+}
