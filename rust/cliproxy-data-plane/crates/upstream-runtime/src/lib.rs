@@ -567,10 +567,10 @@ fn preferred_proxy_setting(
 }
 
 fn inherited_proxy_setting() -> ProxySetting {
-    if let Some(proxy) = first_env_value(&["ALL_PROXY", "all_proxy"]) {
-        if let Ok(setting) = ProxySetting::parse(&proxy) {
-            return setting;
-        }
+    if let Some(proxy) = first_env_value(&["ALL_PROXY", "all_proxy"])
+        && let Ok(setting) = ProxySetting::parse(&proxy)
+    {
+        return setting;
     }
     ProxySetting::Inherit
 }

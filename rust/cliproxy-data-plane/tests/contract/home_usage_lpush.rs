@@ -95,11 +95,12 @@ async fn home_mode_lpush_usage_to_external_redis_queue() {
 
     // Wait for the asynchronous LPUSH to reach the fake Redis server.
     for _ in 0..50 {
-        let guard = captured.lock().expect("lock captured commands");
-        if guard.iter().any(|line| line.starts_with("LPUSH usage ")) {
-            break;
+        {
+            let guard = captured.lock().expect("lock captured commands");
+            if guard.iter().any(|line| line.starts_with("LPUSH usage ")) {
+                break;
+            }
         }
-        drop(guard);
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 

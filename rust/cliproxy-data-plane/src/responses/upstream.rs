@@ -35,6 +35,7 @@ struct UpstreamExecutionOutcome {
 ///
 /// 对 Codex 来说，即使下游是非流式客户端，也仍然先走流式上游，
 /// 这样 Rust 路径才能复用 CPA 的 SSE 修复与终态聚合逻辑。
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn execute_real_upstream(
     upstream: UpstreamRuntime,
     request: ResponsesRequest,
@@ -170,6 +171,7 @@ pub(super) async fn execute_real_upstream(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_upstream_with_retries(
     upstream: &UpstreamRuntime,
     snapshot: &RuntimeSnapshot,

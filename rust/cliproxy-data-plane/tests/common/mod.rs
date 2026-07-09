@@ -128,6 +128,7 @@ pub fn openai_upstream(base_url: String) -> UpstreamRuntime {
     })
 }
 
+#[allow(dead_code)]
 pub fn codex_upstream(base_url: String) -> UpstreamRuntime {
     UpstreamRuntime::new(UpstreamRuntimeConfig {
         upstream_proxy: None,
@@ -218,6 +219,7 @@ pub async fn spawn_openai_upstream() -> String {
     format!("http://{}", addr)
 }
 
+#[allow(dead_code)]
 pub async fn spawn_codex_failover_upstream() -> String {
     async fn responses(headers: HeaderMap, request: Request<Body>) -> impl IntoResponse {
         let auth = headers
@@ -288,6 +290,7 @@ pub async fn spawn_codex_failover_upstream() -> String {
     format!("http://{}", addr)
 }
 
+#[allow(dead_code)]
 pub async fn spawn_codex_quota_failover_upstream() -> String {
     async fn responses(headers: HeaderMap, request: Request<Body>) -> impl IntoResponse {
         let auth = headers

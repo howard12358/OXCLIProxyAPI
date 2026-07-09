@@ -2,6 +2,12 @@
 
 This runbook validates the default embedded Rust data-plane deployment path.
 
+
+> **Execution status (2026-07-09):** Docker daemon unavailable on the current
+> machine, so the automated `embedded-smoke.sh` script could not be executed.
+> To run the smoke test yourself, ensure Docker Engine is running, then follow
+> the steps below.
+
 ## Prerequisites
 
 - Docker Engine and `docker compose` (v2) installed.

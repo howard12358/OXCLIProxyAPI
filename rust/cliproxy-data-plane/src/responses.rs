@@ -487,11 +487,11 @@ mod tests {
 
         let normalized = upstream::normalize_upstream_request(request, &plan);
 
-        assert!(normalized.extra.get("max_output_tokens").is_none());
-        assert!(normalized.extra.get("max_completion_tokens").is_none());
-        assert!(normalized.extra.get("temperature").is_none());
-        assert!(normalized.extra.get("top_p").is_none());
-        assert!(normalized.extra.get("service_tier").is_none());
+        assert!(!normalized.extra.contains_key("max_output_tokens"));
+        assert!(!normalized.extra.contains_key("max_completion_tokens"));
+        assert!(!normalized.extra.contains_key("temperature"));
+        assert!(!normalized.extra.contains_key("top_p"));
+        assert!(!normalized.extra.contains_key("service_tier"));
     }
 
     #[test]
@@ -558,9 +558,9 @@ mod tests {
             normalized.extra["include"],
             json!(["reasoning.encrypted_content"])
         );
-        assert!(normalized.extra.get("context_management").is_none());
-        assert!(normalized.extra.get("truncation").is_none());
-        assert!(normalized.extra.get("user").is_none());
+        assert!(!normalized.extra.contains_key("context_management"));
+        assert!(!normalized.extra.contains_key("truncation"));
+        assert!(!normalized.extra.contains_key("user"));
         assert_eq!(
             normalized.input.as_ref().expect("input")[0]["role"],
             "developer"

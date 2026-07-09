@@ -19,6 +19,7 @@ use super::{ResponsesRequest, ResponsesRequestMetadata, error_response};
 ///
 /// 这里负责校验路由是否可用、基于当前 runtime snapshot 构建执行计划，
 /// 并在拿到可执行的真实 upstream 能力后直接进入主链路。
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_responses(
     runtime: RuntimeStateHandle,
     router_core: RouterCore,

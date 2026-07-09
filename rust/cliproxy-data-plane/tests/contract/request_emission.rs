@@ -39,10 +39,11 @@ async fn codex_request_emission_matches_golden_fixtures() {
     let mut names: Vec<String> = Vec::new();
     for path in &entries {
         let file_name = path.file_stem().unwrap().to_string_lossy();
-        if let Some((name, suffix)) = file_name.rsplit_once('.') {
-            if suffix == "request" && !names.contains(&name.to_string()) {
-                names.push(name.to_string());
-            }
+        if let Some((name, suffix)) = file_name.rsplit_once('.')
+            && suffix == "request"
+            && !names.contains(&name.to_string())
+        {
+            names.push(name.to_string());
         }
     }
 
@@ -161,7 +162,7 @@ fn normalize_json(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
             let mut entries: Vec<_> = map.iter().collect();
-            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+            entries.sort_by_key(|(a, _)| *a);
             Value::Object(
                 entries
                     .into_iter()

@@ -27,10 +27,7 @@ impl ResponsesSseFramer {
         self.pending.extend_from_slice(&chunk);
 
         let mut out = Vec::new();
-        loop {
-            let Some(frame_len) = sse_frame_len(&self.pending) else {
-                break;
-            };
+        while let Some(frame_len) = sse_frame_len(&self.pending) {
             let frame = self.pending.drain(..frame_len).collect::<Vec<_>>();
             if let Some(frame) = self.consume_frame(frame) {
                 out.push(frame);

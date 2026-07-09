@@ -77,15 +77,15 @@ impl UsageQueue {
             external.clone()
         };
 
-        if let Some(config) = config {
-            if !config.address.trim().is_empty() {
-                let payload = payload.clone();
-                tokio::spawn(async move {
-                    if let Err(err) = lpush_usage_payload(&config, &payload).await {
-                        warn!(error = %err, "external usage queue LPUSH failed");
-                    }
-                });
-            }
+        if let Some(config) = config
+            && !config.address.trim().is_empty()
+        {
+            let payload = payload.clone();
+            tokio::spawn(async move {
+                if let Err(err) = lpush_usage_payload(&config, &payload).await {
+                    warn!(error = %err, "external usage queue LPUSH failed");
+                }
+            });
         }
 
         let mut inner = self.inner.lock().expect("usage queue lock poisoned");

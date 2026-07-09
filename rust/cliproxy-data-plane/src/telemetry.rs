@@ -36,6 +36,12 @@ enum UsageSink {
     Queue(UsageQueue),
 }
 
+impl Default for AppTelemetry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppTelemetry {
     pub fn new() -> Self {
         Self {
@@ -49,6 +55,7 @@ impl AppTelemetry {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_request(
         &self,
         request_model: &str,
@@ -213,9 +220,7 @@ impl RequestTelemetry {
             .finished
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
-        {
-            return;
-        }
+        {}
     }
 
     pub fn error_event_request_id(&self) -> String {

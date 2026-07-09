@@ -2,10 +2,18 @@
 
 ## Automated Test Commands
 
-Go full test:
+Go full workspace test:
 
 ```bash
 go test ./...
+```
+
+Go targeted package sets:
+
+```bash
+go test ./internal/... -count=1
+go test ./sdk/... -count=1
+go test ./test/... -count=1
 ```
 
 Go targeted test:
@@ -24,6 +32,24 @@ Rust workspace test:
 
 ```bash
 cargo test --workspace --manifest-path rust/cliproxy-data-plane/Cargo.toml
+```
+
+Rust format check:
+
+```bash
+cargo fmt --manifest-path rust/cliproxy-data-plane/Cargo.toml --check
+```
+
+Rust clippy with warnings-as-errors:
+
+```bash
+cargo clippy --manifest-path rust/cliproxy-data-plane/Cargo.toml --all-targets -- -D warnings
+```
+
+Rust all-targets test:
+
+```bash
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --all-targets
 ```
 
 Rust route-focused test:
