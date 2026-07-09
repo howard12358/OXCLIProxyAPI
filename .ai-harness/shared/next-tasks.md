@@ -30,14 +30,14 @@ Rust /v1/responses 生产化前夜
 
 ## 2. 总体优先级
 
-| 优先级 | 任务                                                  | 目标                                      |
-| --- | --------------------------------------------------- | --------------------------------------- |
-| P0  | 整理测试代码可读性与测试命令                                      | 保证 Codex / 人类后续能稳定维护                    |
-| P0  | 扩展 `/v1/responses` Codex request emission golden 矩阵 | 钉死 Codex 请求兼容边界                         |
-| P0  | 补 snapshot negative fixtures                        | 防止 Go exporter / Rust common-types 协议漂移 |
-| P1  | 实现 Home 模式 `LPUSH usage` 最小闭环                       | 对齐原 CPA usage 统计链路                      |
-| P1  | 补“下游客户端断开”stream abort 测试                           | 防止 stream 长连接泄漏                         |
-| P2  | 跑 embedded smoke 并沉淀 runbook                        | 验证默认 Docker/embedded 路径可用               |
+| 优先级 | 任务                                                  | 状态                   |
+| --- | --------------------------------------------------- | ---------------------- |
+| P0  | 整理测试代码可读性与测试命令                                      | ✅ 完成                  |
+| P0  | 扩展 `/v1/responses` Codex request emission golden 矩阵 | ✅ 完成（10 组 fixtures）    |
+| P0  | 补 snapshot negative fixtures                        | ✅ 完成（9 组负例 + 1 组正例）  |
+| P1  | 实现 Home 模式 `LPUSH usage` 最小闭环                       | ✅ 完成（含 contract test）  |
+| P1  | 补“下游客户端断开”stream abort 测试                           | ✅ 完成（3 场景覆盖）          |
+| P2  | 跑 embedded smoke 并沉淀 runbook                        | ✅ 完成                  |
 
 ---
 
@@ -715,6 +715,62 @@ curl http://127.0.0.1:8317/v0/management/usage-queue?count=10
 ```
 
 ---
+
+# 10.5 实际完成情况（2026-07-09）
+
+## 10.5.1 request_emission.rs（10 组 golden fixtures）
+
+| Fixture | 覆盖点 |
+| ------- | ------ |
+| `input_string` | string input 提升为 messages array |
+| `input_messages_array` | messages array 输入保持 |
+| `system_role_to_developer` | system role -> developer role 归一 |
+| `reasoning_effort` | reasoning.effort 抽取 |
+| `service_tier` | service_tier 保留 |
+| `tools_empty_parallel_removed` | 无 tools 时移除 parallel_tool_calls |
+| `tools_non_empty_parallel_preserved` | 有 tools 时保留 tool schema + parallel_tool_calls |
+| `include_encrypted_content_injected` | include[].encrypted_content 注入 |
+| `unsupported_generation_fields_removed` | temperature/top_p/max_output_tokens 剥离 |
+| `web_search_preview_normalized` | web_search_preview 别名 -> web_search |
+
+测试方式：mock upstream 捕获 Rust 发出的真实请求体 JSON，normalize 后与 expected.json 逐字段比较。
+
+## 10.5.2 snapshot_schema.rs（1 正例 + 9 负例）
+
+| 测试 | Validated 字段 |
+| ---- | --------------- |
+| `parses_go_exported_runtime_snapshot_golden` | 正例 parse + validate |
+| `rejects_invalid_snapshot_missing_version_fixture` | `snapshot.version` |
+| `rejects_invalid_snapshot_missing_generated_at` | `snapshot.generated_at` |
+| `rejects_invalid_snapshot_missing_source_instance_id` | `snapshot.source_instance_id` |
+| `rejects_invalid_snapshot_codex_missing_access_token` | `execution.codex.access_token` |
+| `rejects_invalid_snapshot_empty_auth_index` | `auth_index` |
+| `rejects_invalid_snapshot_empty_model_alias_target` | `model_aliases` |
+| `rejects_invalid_snapshot_provider_missing_model` | `models` |
+| `rejects_invalid_snapshot_empty_provider_key` | `providers` |
+| `rejects_invalid_snapshot_route_missing_target` | `listeners.public_http` |
+
+## 10.5.3 stream_abort.rs（3 场景）
+
+| 测试 | 场景 |
+| ---- | ---- |
+| `stream_true_aborts_after_created_emits_error_frame` | upstream SSE 中途断开，stream=true 路径吐出 error frame |
+| `stream_false_aggregate_aborts_after_created_returns_bad_gateway` | upstream SSE 中途断开，stream=false 聚合路径返回 502 |
+| `downstream_client_drop_cancels_upstream_stream` | client 读 2 帧后 drop，验证 upstream 连接关闭 + usage queue 无 success 记录 |
+
+## 10.5.4 home_usage_lpush.rs（1 场景）
+
+| 测试 | 覆盖 |
+| ---- | ---- |
+| `home_mode_lpush_usage_to_external_redis_queue` | 真实 /v1/responses 请求 -> fake RESP Redis 收到 AUTH + LPUSH usage payload，验证 provider/model/source 字段正确 |
+
+## 10.5.5 usage_queue.rs（3 场景）
+
+| 测试 | 覆盖 |
+| ---- | ---- |
+| `http_usage_queue_pop_is_fifo_and_consuming` | HTTP GET /v0/management/usage-queue FIFO pop + 消费语义 |
+| `resp_lpop_rpop_and_auth_follow_usage_contract` | RESP AUTH 认证拒绝/通过、LPOP/RPOP FIFO、空队列返回 $-1 |
+| `resp_subscribe_receives_usage_without_buffering_http_fallback_copy` | RESP SUBSCRIBE usage 广播不落盘、support_refresh 控制消息 |
 
 # 11. 完成后的阶段目标
 

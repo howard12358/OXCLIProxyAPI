@@ -46,7 +46,8 @@ This document records durable repository-level state. It is not a per-session ta
   - CPA-shaped usage queue payload emission for `/v1/responses` when `usage_queue.enabled=true` and `usage_queue.backend=redis`
   - CPA-compatible in-memory usage queue with subscriber fan-out, `support_refresh` / `refresh` control payloads, and pop semantics
   - HTTP usage queue pop endpoint at `/v0/management/usage-queue`
-  - Redis RESP usage protocol support for `AUTH`, `SUBSCRIBE usage/errors`, `LPOP usage`, and `RPOP usage`
+  - Redis RESP usage protocol support for `AUTH`, `SUBSCRIBE usage/errors`, `LPOP usage`, and `RPOP usage`, verified via:
+    - `usage_queue` contract tests: HTTP pop FIFO+consuming, RESP LPOP/RPOP/AUTH, RESP SUBSCRIBE broadcast-without-buffering
   - real RESP `errors` payload production for `/v1/responses` upstream failures
   - Go-side data-plane usage bridge that subscribes to Rust `usage` over Redis RESP and re-enqueues records into CPA redisqueue, with HTTP pop fallback
   - Go-side bridge auth selection that uses the embedded/local management password first and falls back to `MANAGEMENT_PASSWORD` for external data-plane dev stacks
@@ -55,10 +56,31 @@ This document records durable repository-level state. It is not a per-session ta
   - upstream request/response redaction helpers for logging
   - Codex native Responses array input and extra top-level request fields are preserved through Rust `/v1/responses` upstream normalization
   - Codex request emission compatibility matrix covering forced rewrites, filtered unsupported fields, conditional `service_tier`, `system -> developer`, web-search builtin tool alias normalization, input lifting, reasoning/reasoning_effort, tools/parallel_tool_calls, include injection, and unsupported generation field stripping
-  - golden fixture tests that capture the normalized upstream request body sent to Codex for the emission matrix
-  - negative runtime snapshot fixtures and validation to guard against Go/Rust schema drift
-  - optional external RESP `LPUSH usage` forwarding for Home-mode usage aggregation
-  - downstream-client stream-abort test verifying upstream cancellation and no success usage payload
+  - 10 request emission golden fixtures that capture the normalized upstream request body sent to Codex:
+    - `input_string` — string input lifted to messages array
+    - `input_messages_array` — messages array input preserved
+    - `system_role_to_developer` — system role normalized to developer
+    - `reasoning_effort` — reasoning.effort extracted from extras
+    - `service_tier` — service_tier preserved/conditionally applied
+    - `tools_empty_parallel_removed` — parallel_tool_calls dropped when tools is empty
+    - `tools_non_empty_parallel_preserved` — tool schema and parallel_tool_calls preserved
+    - `include_encrypted_content_injected` — include[].encrypted_content injected
+    - `unsupported_generation_fields_removed` — temperature/top_p/max_output_tokens stripped
+    - `web_search_preview_normalized` — web_search_preview alias normalized to web_search
+  - runtime snapshot validation rejects bad snapshots for 9 boundary conditions:
+    - missing `version` / `generated_at` / `source_instance_id`
+    - Codex OAuth auth without `execution.codex.access_token`
+    - empty `auth_index` on auth records
+    - empty model alias upstream target
+    - enabled provider without `models` entry
+    - empty provider key in `providers`
+    - empty `listeners.public_http` (route missing target)
+  - optional external RESP `LPUSH usage` forwarding for Home-mode usage aggregation, tested via:
+    - `home_usage_lpush` contract test with fake RESP Redis server verifying AUTH + LPUSH usage payload via real `/v1/responses` request
+  - stream abort contract tests covering 3 scenarios:
+    - upstream SSE drops mid-stream on stream=true path (emits error frame)
+    - upstream SSE drops mid-stream on stream=false aggregate path (returns 502)
+    - downstream client drops after 2 SSE frames, verifying upstream cancellation and no success usage payload
   - snapshot notify endpoint
   - runtime snapshot observation endpoint
   - graceful SIGTERM / Ctrl-C shutdown logging for the Rust data-plane listener
