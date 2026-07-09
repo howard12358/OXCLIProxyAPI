@@ -685,6 +685,7 @@ mod tests {
             usage_queue: UsageQueueConfig {
                 enabled,
                 backend: backend.to_string(),
+                external: None,
             },
             ..RuntimeSnapshot::default()
         }

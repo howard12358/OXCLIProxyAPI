@@ -40,6 +40,9 @@ pub async fn run(config: Config) -> Result<()> {
     let listener = TcpListener::bind(config.bind_addr).await?;
     let local_addr = listener.local_addr()?;
     let usage_queue = UsageQueue::new();
+    if let Some(snapshot) = runtime_state.current_snapshot() {
+        usage_queue.set_external_config(snapshot.usage_queue.external.clone());
+    }
     let auth_state = AuthStateOverlay::new();
     let redis_auth_password = config.snapshot_bearer_token.clone();
     let app = http::router_with_snapshot_client_and_usage_queue(

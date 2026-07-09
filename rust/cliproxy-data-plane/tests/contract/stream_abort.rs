@@ -172,3 +172,146 @@ async fn spawn_aborting_sse_upstream(partial_body: &str) -> String {
 
     format!("http://{}", addr)
 }
+
+use cliproxy_data_plane::usage_queue::UsageQueue;
+use futures_util::StreamExt;
+use reqwest::Client;
+
+#[tokio::test]
+async fn downstream_client_drop_cancels_upstream_stream() {
+    let (upstream_url, upstream_closed) = spawn_slow_infinite_sse_upstream().await;
+    let usage_queue = UsageQueue::new();
+
+    let app = router(
+        test_runtime_with_auths(
+            true,
+            cliproxy_common_types::snapshot::RoutingStrategy::FillFirst,
+            vec![codex_oauth_auth(
+                "auth-codex-a",
+                100,
+                "codex-token-a",
+                "acct_a",
+                Some(&upstream_url),
+            )],
+        ),
+        openai_upstream(upstream_url),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind data plane");
+    let addr = listener.local_addr().expect("data plane addr");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve data plane");
+    });
+
+    let client = Client::new();
+    let response = client
+        .post(format!("http://{}/v1/responses", addr))
+        .header("content-type", "application/json")
+        .body(r#"{"model":"codex-latest","input":"hello","stream":true}"#.to_string())
+        .send()
+        .await
+        .expect("send request");
+
+    assert_eq!(response.status(), 200);
+
+    let mut stream = response.bytes_stream();
+    let mut frames = 0;
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.expect("chunk");
+        let text = String::from_utf8_lossy(&bytes);
+        for line in text.lines() {
+            if line.starts_with("event:") {
+                frames += 1;
+            }
+        }
+        if frames >= 2 {
+            break;
+        }
+    }
+    assert!(frames >= 2, "should read at least 2 SSE frames");
+
+    // Drop the response body and client to simulate downstream abort.
+    drop(stream);
+    drop(client);
+
+    // Wait for the cancel to propagate back to the upstream mock.
+    for _ in 0..30 {
+        if upstream_closed.load(std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    assert!(
+        upstream_closed.load(std::sync::atomic::Ordering::SeqCst),
+        "upstream should observe connection close after downstream drops"
+    );
+
+    // Usage queue should not contain a success-completed record.
+    let payloads = usage_queue.pop_oldest_json(10);
+    let success_completed = payloads.iter().any(|payload| {
+        payload.get("failed").and_then(|v| v.as_bool()) == Some(false)
+            && payload.get("endpoint").and_then(|v| v.as_str()) == Some("POST /v1/responses")
+    });
+    assert!(
+        !success_completed,
+        "usage queue should not contain a success completed payload after downstream abort"
+    );
+}
+
+async fn spawn_slow_infinite_sse_upstream()
+-> (String, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let closed = Arc::new(AtomicBool::new(false));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind upstream");
+    let addr = listener.local_addr().expect("upstream addr");
+    let closed_spawn = Arc::clone(&closed);
+
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let closed = Arc::clone(&closed_spawn);
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                // Read the HTTP request headers to unblock the client.
+                let _ =
+                    tokio::time::timeout(Duration::from_millis(100), stream.read(&mut buf)).await;
+
+                let headers = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nConnection: close\r\n\r\n";
+                if stream.write_all(headers).await.is_err() {
+                    closed.store(true, Ordering::SeqCst);
+                    return;
+                }
+
+                let created = b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-abort-1\",\"status\":\"in_progress\"}}\n\n";
+                if stream.write_all(created).await.is_err() {
+                    closed.store(true, Ordering::SeqCst);
+                    return;
+                }
+
+                let mut counter = 0;
+                loop {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    let delta = format!(
+                        "event: response.output_text.delta\ndata: {{\"type\":\"response.output_text.delta\",\"item_id\":\"msg-1\",\"output_index\":0,\"content_index\":0,\"delta\":\"{counter}\"}}\n\n"
+                    );
+                    if stream.write_all(delta.as_bytes()).await.is_err() {
+                        closed.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                    counter += 1;
+                }
+            });
+        }
+    });
+
+    (format!("http://{}", addr), closed)
+}

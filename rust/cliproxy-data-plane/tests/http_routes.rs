@@ -945,6 +945,7 @@ async fn responses_route_usage_payload_includes_source_and_downstream_api_key() 
     snapshot.usage_queue = UsageQueueConfig {
         enabled: true,
         backend: "redis".to_string(),
+        external: None,
     };
     runtime.apply_snapshot(snapshot);
     let usage_queue = UsageQueue::new();
@@ -1012,6 +1013,7 @@ async fn responses_route_usage_payload_includes_reasoning_effort_and_service_tie
     snapshot.usage_queue = UsageQueueConfig {
         enabled: true,
         backend: "redis".to_string(),
+        external: None,
     };
     runtime.apply_snapshot(snapshot);
     let usage_queue = UsageQueue::new();

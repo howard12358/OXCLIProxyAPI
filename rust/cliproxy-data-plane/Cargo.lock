@@ -268,6 +268,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

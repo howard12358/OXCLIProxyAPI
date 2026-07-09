@@ -176,6 +176,33 @@ pub mod snapshot {
         pub enabled: bool,
         #[serde(default)]
         pub backend: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub external: Option<ExternalUsageQueueConfig>,
+    }
+
+    /// 外部 usage queue 推送配置，用于 Home 模式直接 LPUSH 到 Redis/CPA queue。
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct ExternalUsageQueueConfig {
+        #[serde(default = "default_external_usage_address")]
+        pub address: String,
+        #[serde(default)]
+        pub password: String,
+        #[serde(default = "default_external_usage_key")]
+        pub key: String,
+        #[serde(default = "default_external_usage_timeout_ms")]
+        pub timeout_ms: u64,
+    }
+
+    fn default_external_usage_address() -> String {
+        String::new()
+    }
+
+    fn default_external_usage_key() -> String {
+        "usage".to_string()
+    }
+
+    fn default_external_usage_timeout_ms() -> u64 {
+        5000
     }
 
     /// 网络层附加配置，目前主要承载统一上游代理。

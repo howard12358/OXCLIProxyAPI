@@ -42,6 +42,7 @@ async fn http_usage_queue_pop_is_fifo_and_consuming() {
     snapshot.usage_queue = UsageQueueConfig {
         enabled: true,
         backend: "redis".to_string(),
+        external: None,
     };
     runtime.apply_snapshot(snapshot);
 

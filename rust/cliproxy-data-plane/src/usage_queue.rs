@@ -4,11 +4,18 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
+use cliproxy_common_types::snapshot::ExternalUsageQueueConfig;
 use cliproxy_usage_events::UsageQueuePayload;
 use serde_json::Value;
-use tokio::sync::mpsc;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    sync::mpsc,
+};
+use tracing::warn;
 
 use crate::error_events::ErrorEvent;
 
@@ -20,10 +27,14 @@ const SUBSCRIBER_BUFFER: usize = 256;
 ///
 /// CPA 的规则是“有订阅者则直接广播，不再写入内存队列”；这里保持相同行为，
 /// 让 Keeper 的 SUBSCRIBE 路径和 HTTP/LPOP 兜底路径不会重复消费同一条记录。
+///
+/// 当 snapshot 中配置了 `usage_queue.external` 时，会额外异步 LPUSH 到外部
+/// Redis/CPA queue；外部推送失败不影响主请求链路。
 #[derive(Clone)]
 pub struct UsageQueue {
     inner: Arc<Mutex<UsageQueueInner>>,
     next_subscriber_id: Arc<AtomicU64>,
+    external: Arc<Mutex<Option<ExternalUsageQueueConfig>>>,
 }
 
 #[derive(Default)]
@@ -38,7 +49,14 @@ impl UsageQueue {
         Self {
             inner: Arc::new(Mutex::new(UsageQueueInner::default())),
             next_subscriber_id: Arc::new(AtomicU64::new(1)),
+            external: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// 更新外部 usage queue 推送配置；通常由 snapshot 加载/刷新后调用。
+    pub fn set_external_config(&self, config: Option<ExternalUsageQueueConfig>) {
+        let mut external = self.external.lock().expect("external config lock poisoned");
+        *external = config;
     }
 
     /// 写入 CPA-shaped usage payload；序列化失败时直接丢弃，避免影响主请求链路。
@@ -52,6 +70,22 @@ impl UsageQueue {
     pub fn enqueue_raw(&self, payload: Vec<u8>) {
         if payload.is_empty() {
             return;
+        }
+
+        let config = {
+            let external = self.external.lock().expect("external config lock poisoned");
+            external.clone()
+        };
+
+        if let Some(config) = config {
+            if !config.address.trim().is_empty() {
+                let payload = payload.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = lpush_usage_payload(&config, &payload).await {
+                        warn!(error = %err, "external usage queue LPUSH failed");
+                    }
+                });
+            }
         }
 
         let mut inner = self.inner.lock().expect("usage queue lock poisoned");
@@ -190,6 +224,81 @@ impl Drop for UsageSubscription {
 enum QueueChannel {
     Usage,
     Errors,
+}
+
+/// 向外部 Redis/CPA queue 执行 RESP LPUSH。
+///
+/// 第一版只做最小命令序列：可选 AUTH、LPUSH key payload，并读取简单响应确认。
+/// 任何网络/协议错误都会返回，由调用方记录日志，不阻塞主链路。
+async fn lpush_usage_payload(
+    config: &ExternalUsageQueueConfig,
+    payload: &[u8],
+) -> anyhow::Result<()> {
+    let address = config.address.trim();
+    if address.is_empty() {
+        return Ok(());
+    }
+
+    let stream = tokio::time::timeout(
+        Duration::from_millis(config.timeout_ms),
+        TcpStream::connect(address),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("connect timeout"))?
+    .map_err(|err| anyhow::anyhow!("connect failed: {err}"))?;
+
+    let mut stream = stream;
+
+    if !config.password.is_empty() {
+        let auth_cmd = resp_command(&["AUTH", &config.password]);
+        tokio::time::timeout(
+            Duration::from_millis(config.timeout_ms),
+            stream.write_all(&auth_cmd),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("auth write timeout"))?
+        .map_err(|err| anyhow::anyhow!("auth write failed: {err}"))?;
+        read_simple_response(&mut stream, config.timeout_ms).await?;
+    }
+
+    let payload_str = std::str::from_utf8(payload)
+        .map_err(|err| anyhow::anyhow!("payload is not valid utf8: {err}"))?;
+    let lpush_cmd = resp_command(&["LPUSH", &config.key, payload_str]);
+    tokio::time::timeout(
+        Duration::from_millis(config.timeout_ms),
+        stream.write_all(&lpush_cmd),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("lpush write timeout"))?
+    .map_err(|err| anyhow::anyhow!("lpush write failed: {err}"))?;
+    read_simple_response(&mut stream, config.timeout_ms).await?;
+
+    Ok(())
+}
+
+fn resp_command(args: &[&str]) -> Vec<u8> {
+    let mut out = format!("*{args_len}\r\n", args_len = args.len()).into_bytes();
+    for arg in args {
+        out.extend_from_slice(format!("${len}\r\n{arg}\r\n", len = arg.len()).as_bytes());
+    }
+    out
+}
+
+async fn read_simple_response(stream: &mut TcpStream, timeout_ms: u64) -> anyhow::Result<()> {
+    let mut buf = [0u8; 256];
+    let n = tokio::time::timeout(Duration::from_millis(timeout_ms), stream.read(&mut buf))
+        .await
+        .map_err(|_| anyhow::anyhow!("read timeout"))?
+        .map_err(|err| anyhow::anyhow!("read failed: {err}"))?;
+    if n == 0 {
+        return Err(anyhow::anyhow!("connection closed before response"));
+    }
+    let prefix = buf[0];
+    if prefix == b'-' {
+        let text = String::from_utf8_lossy(&buf[..n]);
+        return Err(anyhow::anyhow!("resp error: {text}"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
