@@ -88,7 +88,6 @@
 - Commands:
   - `cargo run --manifest-path rust/cliproxy-data-plane/Cargo.toml -- ...`
   - `make dev-stack`
-  - `make dev-stack-url`
 
 ## Snapshot / Go-to-Rust Runtime Sync
 

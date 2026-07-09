@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-GO_CONFIG ?= temp/config.prod-auth-test.yaml
+GO_CONFIG ?= temp/config.prod-auth-test.embedded.yaml
 GO_ADDR ?= 127.0.0.1:8317
 GO_HEALTH_URL ?= http://$(GO_ADDR)/healthz
 MANAGEMENT_KEY ?= test-management-key
@@ -18,43 +18,39 @@ UPSTREAM_HTTP_PROXY ?=
 UPSTREAM_HTTPS_PROXY ?=
 
 TMP_DIR ?= temp
+GO_DEV_BINARY ?= $(TMP_DIR)/cli-proxy-api-dev
 GO_PID_FILE ?= $(TMP_DIR)/dev-go.pid
 GO_LOG_FILE ?= $(TMP_DIR)/dev-go.log
 RUST_PID_FILE ?= $(TMP_DIR)/dev-rust.pid
 RUST_LOG_FILE ?= $(TMP_DIR)/dev-rust.log
+EMBEDDED_STATE_DIR ?= $(TMP_DIR)/embedded-data-plane
+EMBEDDED_RUST_STDOUT_LOG ?= $(EMBEDDED_STATE_DIR)/logs/data-plane/stdout.log
+EMBEDDED_RUST_STDERR_LOG ?= $(EMBEDDED_STATE_DIR)/logs/data-plane/stderr.log
 SNAPSHOT_FILE ?= $(TMP_DIR)/cpa-runtime-snapshot.dev.json
 SNAPSHOT_CURRENT_FILE ?= $(TMP_DIR)/cpa-runtime-snapshot.current.json
 RUST_SNAPSHOT_URL ?= http://$(RUST_BIND_ADDR)/v0/runtime/snapshot
 RUST_SNAPSHOT_FILE ?= $(TMP_DIR)/rs-runtime-snapshot.current.json
 
-.PHONY: help dev-stack dev-stack-url stop-stack restart-stack status-stack ps-stack kill-stack-orphans logs-stack logs-go logs-rust snapshot-stack snapshot-current snapshot-rs diff-snapshots test-responses prepare-embedded-data-plane build-release-embedded clean-release-embedded
+.PHONY: help dev-stack stop-stack status-stack logs-stack logs-go logs-rust snapshot-current snapshot-rs diff-snapshots
 
 help:
 	@printf "%s\n" \
 	"可用目标：" \
-	"  make dev-stack      启动 Go 管理平面和 Rust 数据平面" \
-	"  make dev-stack-url  启动 Go 管理平面，并让 Rust 通过网络持续拉取 snapshot" \
+	"  make dev-stack      启动默认 embedded 本地联调栈（推荐，贴近生产）" \
 	"  make stop-stack     停止 Go/Rust 联调进程" \
-	"  make restart-stack  重启 Go/Rust 联调进程" \
 	"  make status-stack   查看 Go/Rust 联调进程状态" \
-	"  make ps-stack       列出当前仓库相关的 Go/Rust 进程" \
-	"  make kill-stack-orphans 杀掉当前仓库相关的 Go/Rust 孤儿进程" \
 	"  make logs-stack     查看 Go/Rust 联调日志" \
 	"  make logs-go        持续跟踪 Go 日志" \
-	"  make logs-rust      持续跟踪 Rust 日志" \
-	"  make snapshot-stack 重新导出本地 snapshot 文件" \
+	"  make logs-rust      持续跟踪 embedded Rust 子进程日志" \
 	"  make snapshot-current 拉取当前 Go 管理面的原始 snapshot 到文件" \
 	"  make snapshot-rs    拉取当前 Rust 数据面已应用的 snapshot 到文件" \
 	"  make diff-snapshots 拉取 Go/Rust 当前 snapshot 并输出差异" \
-	"  make test-responses 调用 Rust /v1/responses 测试接口" \
-	"  make prepare-embedded-data-plane 生成 release 用 embedded Rust artifact" \
-	"  make build-release-embedded       用 release_embedded_artifact tag 构建 Go 主程序" \
-	"  make clean-release-embedded       清理临时生成的 embedded artifact 文件" \
 	"" \
 	"可选变量：" \
 	"  GO_CONFIG=<path>        默认 $(GO_CONFIG)" \
 	"  MANAGEMENT_KEY=<key>    默认 $(MANAGEMENT_KEY)" \
 	"  GO_ADDR=<host:port>     默认 $(GO_ADDR)" \
+	"  GO_DEV_BINARY=<path>    默认 $(GO_DEV_BINARY)" \
 	"  RUST_BIND_ADDR=<addr>   默认 $(RUST_BIND_ADDR)" \
 	"  SNAPSHOT_CURRENT_FILE=<path> 默认 $(SNAPSHOT_CURRENT_FILE)" \
 	"  RUST_SNAPSHOT_FILE=<path> 默认 $(RUST_SNAPSHOT_FILE)" \
@@ -68,8 +64,20 @@ dev-stack:
 	@set -euo pipefail; \
 	mkdir -p "$(TMP_DIR)"; \
 	$(MAKE) stop-stack >/dev/null; \
+	echo "编译 Go 管理平面..."; \
+	go build -o "$(GO_DEV_BINARY)" ./cmd/server >/dev/null; \
+	echo "编译 Rust 数据平面（debug）..."; \
+	cargo build --manifest-path "$(RUST_DIR)/Cargo.toml" >/dev/null; \
+	rust_binary_path="$(RUST_DIR)/target/debug/cliproxy-data-plane"; \
+	case "$(HOST_UNAME_S)" in \
+		MINGW64_NT-*|MSYS_NT-*|CYGWIN_NT-*) rust_binary_path="$$rust_binary_path.exe" ;; \
+	esac; \
 	echo "启动 Go 管理平面..."; \
-	nohup env MANAGEMENT_PASSWORD="$(MANAGEMENT_KEY)" go run ./cmd/server --config "$(GO_CONFIG)" >"$(GO_LOG_FILE)" 2>&1 & echo $$! >"$(GO_PID_FILE)"; \
+	nohup env MANAGEMENT_PASSWORD="$(MANAGEMENT_KEY)" \
+		CLIPROXY_DATA_PLANE_BINARY_PATH="$$rust_binary_path" \
+		CLIPROXY_UPSTREAM_PROXY="$(UPSTREAM_PROXY)" CLIPROXY_UPSTREAM_HTTP_PROXY="$(UPSTREAM_HTTP_PROXY)" CLIPROXY_UPSTREAM_HTTPS_PROXY="$(UPSTREAM_HTTPS_PROXY)" \
+		http_proxy="$${http_proxy-}" https_proxy="$${https_proxy-}" HTTP_PROXY="$${HTTP_PROXY-}" HTTPS_PROXY="$${HTTPS_PROXY-}" \
+		"$(GO_DEV_BINARY)" --config "$(GO_CONFIG)" >"$(GO_LOG_FILE)" 2>&1 & echo $$! >"$(GO_PID_FILE)"; \
 	for i in $$(seq 1 30); do \
 		if curl -sf "$(GO_HEALTH_URL)" >/dev/null; then \
 			break; \
@@ -80,68 +88,19 @@ dev-stack:
 			exit 1; \
 		fi; \
 	done; \
-	$(MAKE) snapshot-stack >/dev/null; \
-	echo "启动 Rust 数据平面..."; \
-	nohup env http_proxy="$${http_proxy-}" https_proxy="$${https_proxy-}" HTTP_PROXY="$${HTTP_PROXY-}" HTTPS_PROXY="$${HTTPS_PROXY-}" all_proxy= ALL_PROXY= \
-		CLIPROXY_UPSTREAM_PROXY="$(UPSTREAM_PROXY)" CLIPROXY_UPSTREAM_HTTP_PROXY="$(UPSTREAM_HTTP_PROXY)" CLIPROXY_UPSTREAM_HTTPS_PROXY="$(UPSTREAM_HTTPS_PROXY)" \
-		cargo run --manifest-path "$(RUST_DIR)/Cargo.toml" -- --bind-addr "$(RUST_BIND_ADDR)" --snapshot-file "$(SNAPSHOT_FILE)" \
-		>"$(RUST_LOG_FILE)" 2>&1 & echo $$! >"$(RUST_PID_FILE)"; \
 	for i in $$(seq 1 30); do \
 		if curl -sf "$(RUST_READY_URL)" >/dev/null; then \
-			echo "联调栈已就绪"; \
+			echo "embedded 联调栈已就绪"; \
 			echo "Go  日志: $(GO_LOG_FILE)"; \
-			echo "Rust 日志: $(RUST_LOG_FILE)"; \
+			echo "Rust 日志: $(EMBEDDED_RUST_STDOUT_LOG) / $(EMBEDDED_RUST_STDERR_LOG)"; \
 			exit 0; \
 		fi; \
 		sleep 1; \
 		if [[ $$i -eq 30 ]]; then \
-			echo "Rust 数据平面启动超时，查看日志: $(RUST_LOG_FILE)"; \
+			echo "embedded Rust 数据平面启动超时，查看日志: $(EMBEDDED_RUST_STDOUT_LOG)"; \
 			exit 1; \
 		fi; \
 	done
-
-dev-stack-url:
-	@set -euo pipefail; \
-	mkdir -p "$(TMP_DIR)"; \
-	$(MAKE) stop-stack >/dev/null; \
-	echo "启动 Go 管理平面..."; \
-	nohup env MANAGEMENT_PASSWORD="$(MANAGEMENT_KEY)" go run ./cmd/server --config "$(GO_CONFIG)" >"$(GO_LOG_FILE)" 2>&1 & echo $$! >"$(GO_PID_FILE)"; \
-	for i in $$(seq 1 30); do \
-		if curl -sf "$(GO_HEALTH_URL)" >/dev/null; then \
-			break; \
-		fi; \
-		sleep 1; \
-		if [[ $$i -eq 30 ]]; then \
-			echo "Go 管理平面启动超时，查看日志: $(GO_LOG_FILE)"; \
-			exit 1; \
-		fi; \
-	done; \
-	echo "启动 Rust 数据平面（snapshot-url 模式）..."; \
-	nohup env http_proxy="$${http_proxy-}" https_proxy="$${https_proxy-}" HTTP_PROXY="$${HTTP_PROXY-}" HTTPS_PROXY="$${HTTPS_PROXY-}" all_proxy= ALL_PROXY= \
-		CLIPROXY_UPSTREAM_PROXY="$(UPSTREAM_PROXY)" CLIPROXY_UPSTREAM_HTTP_PROXY="$(UPSTREAM_HTTP_PROXY)" CLIPROXY_UPSTREAM_HTTPS_PROXY="$(UPSTREAM_HTTPS_PROXY)" \
-		cargo run --manifest-path "$(RUST_DIR)/Cargo.toml" -- --bind-addr "$(RUST_BIND_ADDR)" --snapshot-url "$(SNAPSHOT_URL)" --snapshot-bearer-token "$(MANAGEMENT_KEY)" \
-		>"$(RUST_LOG_FILE)" 2>&1 & echo $$! >"$(RUST_PID_FILE)"; \
-	for i in $$(seq 1 30); do \
-		if curl -sf "$(RUST_READY_URL)" >/dev/null; then \
-			echo "联调栈已就绪（snapshot-url 模式）"; \
-			echo "Go  日志: $(GO_LOG_FILE)"; \
-			echo "Rust 日志: $(RUST_LOG_FILE)"; \
-			exit 0; \
-		fi; \
-		sleep 1; \
-		if [[ $$i -eq 30 ]]; then \
-			echo "Rust 数据平面启动超时，查看日志: $(RUST_LOG_FILE)"; \
-			exit 1; \
-		fi; \
-	done
-
-snapshot-stack:
-	@set -euo pipefail; \
-	mkdir -p "$(TMP_DIR)"; \
-	curl -sf "$(SNAPSHOT_URL)" \
-		-H "Authorization: Bearer $(MANAGEMENT_KEY)" \
-		-o "$(SNAPSHOT_FILE)"; \
-	python3 -c 'import json, pathlib; path = pathlib.Path("$(SNAPSHOT_FILE)"); data = json.loads(path.read_text()); data.setdefault("listeners", {})["public_http"] = "http://$(RUST_BIND_ADDR)"; path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n"); print(path)'
 
 snapshot-current:
 	@set -euo pipefail; \
@@ -193,40 +152,30 @@ stop-stack:
 	done; \
 	GO_ADDR="$(GO_ADDR)" RUST_BIND_ADDR="$(RUST_BIND_ADDR)" ./scripts/dev-stack-procs.sh --kill >/dev/null || true
 
-restart-stack:
-	@$(MAKE) stop-stack
-	@$(MAKE) dev-stack
-
 status-stack:
 	@set -euo pipefail; \
-	for name in "Go:$(GO_PID_FILE):$(GO_HEALTH_URL)" "Rust:$(RUST_PID_FILE):$(RUST_READY_URL)"; do \
-		service=$${name%%:*}; \
-		rest=$${name#*:}; \
-		pid_file=$${rest%%:*}; \
-		url=$${rest##*:}; \
-		if [[ -f $$pid_file ]]; then \
-			pid=$$(cat $$pid_file); \
-			if kill -0 $$pid 2>/dev/null; then \
-				echo "$$service 运行中 pid=$$pid"; \
-				curl -sf "$$url" || true; \
-				echo; \
-			else \
-				echo "$$service pid 文件存在但进程已退出"; \
-			fi; \
-		else \
-			echo "$$service 未运行"; \
-		fi; \
-	done
-
-ps-stack:
-	@GO_ADDR="$(GO_ADDR)" RUST_BIND_ADDR="$(RUST_BIND_ADDR)" ./scripts/dev-stack-procs.sh
-
-kill-stack-orphans:
-	@GO_ADDR="$(GO_ADDR)" RUST_BIND_ADDR="$(RUST_BIND_ADDR)" ./scripts/dev-stack-procs.sh --kill
+	go_port="$${GO_ADDR##*:}"; \
+	go_pid="$$(lsof -tiTCP:$$go_port -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"; \
+	if [[ -n "$$go_pid" ]]; then \
+		echo "Go 运行中 pid=$$go_pid"; \
+		curl -sf "$(GO_HEALTH_URL)" || true; \
+		echo; \
+	else \
+		echo "Go 未运行"; \
+	fi; \
+	rust_port="$${RUST_BIND_ADDR##*:}"; \
+	rust_pid="$$(lsof -tiTCP:$$rust_port -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"; \
+	if [[ -n "$$rust_pid" ]]; then \
+		echo "Rust 运行中 pid=$$rust_pid"; \
+		curl -sf "$(RUST_READY_URL)" || true; \
+		echo; \
+	else \
+		echo "Rust 未运行"; \
+	fi
 
 logs-stack:
 	@set -euo pipefail; \
-	for file in "$(GO_LOG_FILE)" "$(RUST_LOG_FILE)"; do \
+	for file in "$(GO_LOG_FILE)" "$(EMBEDDED_RUST_STDOUT_LOG)" "$(EMBEDDED_RUST_STDERR_LOG)" "$(RUST_LOG_FILE)"; do \
 		if [[ -f $$file ]]; then \
 			echo "===== $$file ====="; \
 			tail -n 40 $$file; \
@@ -245,41 +194,10 @@ logs-go:
 	@tail -f "$(GO_LOG_FILE)"
 
 logs-rust:
-	@if [[ ! -f "$(RUST_LOG_FILE)" ]]; then \
-		echo "Rust 日志不存在: $(RUST_LOG_FILE)"; \
+	@if [[ ! -f "$(EMBEDDED_RUST_STDOUT_LOG)" && ! -f "$(EMBEDDED_RUST_STDERR_LOG)" ]]; then \
+		echo "embedded Rust 日志不存在: $(EMBEDDED_RUST_STDOUT_LOG) / $(EMBEDDED_RUST_STDERR_LOG)"; \
 		echo "先执行 make dev-stack"; \
 		exit 1; \
 	fi
-	@echo "跟踪 Rust 日志: $(RUST_LOG_FILE)"
-	@tail -f "$(RUST_LOG_FILE)"
-
-test-responses:
-	@curl -sS -N "http://$(RUST_BIND_ADDR)/v1/responses" \
-		-H 'content-type: application/json' \
-		-d '{"model":"gpt-5.5","stream":true,"input":"hello from make dev-stack"}'
-
-prepare-embedded-data-plane:
-	@set -euo pipefail; \
-	rust_target="$(RUST_TARGET)"; \
-	if [[ -z "$$rust_target" ]]; then \
-		case "$(HOST_UNAME_S):$(HOST_UNAME_M)" in \
-			Darwin:arm64) rust_target="aarch64-apple-darwin" ;; \
-			Darwin:x86_64) rust_target="x86_64-apple-darwin" ;; \
-			Linux:arm64|Linux:aarch64) rust_target="aarch64-unknown-linux-gnu" ;; \
-			Linux:x86_64) rust_target="x86_64-unknown-linux-gnu" ;; \
-			MINGW64_NT-*:x86_64|MSYS_NT-*:x86_64) rust_target="x86_64-pc-windows-msvc" ;; \
-			MINGW64_NT-*:arm64|MSYS_NT-*:arm64) rust_target="aarch64-pc-windows-msvc" ;; \
-			*) \
-				echo "Unable to infer RUST_TARGET from $(HOST_UNAME_S)/$(HOST_UNAME_M); please set it explicitly."; \
-				exit 1; \
-				;; \
-		esac; \
-	fi; \
-	RUST_TARGET="$$rust_target" RELEASE_VERSION="$(RELEASE_VERSION)" bash ./scripts/prepare-embedded-data-plane-release.sh
-
-build-release-embedded:
-	@set -euo pipefail; \
-	go build -tags release_embedded_artifact -o cli-proxy-api ./cmd/server
-
-clean-release-embedded:
-	@rm -f internal/dataplane/embedded/release_artifact.bin internal/dataplane/embedded/release_artifact_generated.go
+	@echo "跟踪 embedded Rust 日志: $(EMBEDDED_RUST_STDOUT_LOG) $(EMBEDDED_RUST_STDERR_LOG)"
+	@tail -f "$(EMBEDDED_RUST_STDOUT_LOG)" "$(EMBEDDED_RUST_STDERR_LOG)"

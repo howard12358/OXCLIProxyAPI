@@ -36,16 +36,18 @@ Dev stack helpers:
 
 ```bash
 make dev-stack
-make dev-stack-url
 make stop-stack
-make restart-stack
 make status-stack
-make ps-stack
-make kill-stack-orphans
 make logs-stack
 make logs-go
 make logs-rust
+make snapshot-current
+make snapshot-rs
+make diff-snapshots
 ```
+
+- `make dev-stack` is the default local path and starts Go in embedded data-plane mode using the locally built Rust debug binary through `CLIPROXY_DATA_PLANE_BINARY_PATH`.
+- The Makefile now intentionally focuses on embedded local development and snapshot inspection; standalone Rust local helper targets were removed from the default command surface.
 
 ## Build
 
@@ -76,12 +78,6 @@ Rust:
 ```bash
 cargo test --workspace --manifest-path rust/cliproxy-data-plane/Cargo.toml
 cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test http_routes
-```
-
-Dev smoke:
-
-```bash
-make test-responses
 ```
 
 ## Format / Lint
@@ -149,7 +145,6 @@ MANAGEMENT_KEY=<management-key> API_KEY=<api-key> ./scripts/embedded-smoke.sh
 ## Snapshot / Runtime Inspection
 
 ```bash
-make snapshot-stack
 make snapshot-current
 make snapshot-rs
 make diff-snapshots
