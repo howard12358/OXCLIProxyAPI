@@ -1,0 +1,6 @@
+{
+  "model": "codex-latest",
+  "input": "hello",
+  "service_tier": "priority",
+  "stream": false
+}

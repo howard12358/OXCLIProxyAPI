@@ -1,0 +1,6 @@
+{
+  "model": "codex-latest",
+  "input": "hello",
+  "reasoning_effort": "high",
+  "stream": false
+}

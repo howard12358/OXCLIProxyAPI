@@ -1,0 +1,13 @@
+{
+  "model": "codex-latest",
+  "input": "hello",
+  "tools": [
+    {
+      "type": "function",
+      "name": "lookup",
+      "description": "lookup something"
+    }
+  ],
+  "parallel_tool_calls": true,
+  "stream": false
+}

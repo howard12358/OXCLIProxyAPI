@@ -1,0 +1,68 @@
+{
+  "version": "sha256:928fe5b020e8151fc6a85bdb0f22e80be824495c7de90c2bf4c9ddc1206a7e59",
+  "generated_at": "2026-06-18T10:00:00Z",
+  "source_instance_id": "test-source-instance",
+  "listeners": {
+    "public_http": "http://127.0.0.1:4100"
+  },
+  "routes": {
+    "responses": true,
+    "chat_completions": false,
+    "messages": false
+  },
+  "routing": {
+    "strategy": "fill-first",
+    "session_affinity": true,
+    "session_ttl_seconds": 2700
+  },
+  "providers": {
+    "codex": {
+      "enabled": true
+    }
+  },
+  "model_aliases": {
+    "codex": {
+      "codex-latest": ""
+    }
+  },
+  "models": {
+    "codex": [
+      "gpt-5.3-codex-spark"
+    ]
+  },
+  "auth_pool": [
+    {
+      "id": "auth-codex-1",
+      "auth_index": "7d32d5b5c60c17ec",
+      "provider": "codex",
+      "auth_kind": "oauth",
+      "usage_source": "codex-user@example.com",
+      "priority": 120,
+      "enabled": true,
+      "supports_models": [
+        "gpt-5.3-codex-spark"
+      ],
+      "labels": [
+        "plus"
+      ],
+      "execution": {
+        "codex": {
+          "access_token": "token-1",
+          "account_id": "acct-1",
+          "base_url": "https://chatgpt.com/backend-api/codex",
+          "user_agent": "codex-tui/custom",
+          "openai_beta": "responses=v1"
+        }
+      },
+      "cooldown_until": null
+    }
+  ],
+  "network": {
+    "upstream_proxy": "socks5h://127.0.0.1:7897"
+  },
+  "usage_queue": {
+    "enabled": true,
+    "backend": "redis"
+  },
+  "feature_flags": {}
+}

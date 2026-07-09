@@ -1,0 +1,8 @@
+{
+  "model": "codex-latest",
+  "input": "hello",
+  "include": [
+    "other"
+  ],
+  "stream": false
+}

@@ -1,0 +1,29 @@
+{
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "input": [
+    {
+      "content": [
+        {
+          "text": "hello",
+          "type": "input_text"
+        }
+      ],
+      "role": "user",
+      "type": "message"
+    }
+  ],
+  "instructions": "",
+  "model": "gpt-5-codex",
+  "parallel_tool_calls": true,
+  "store": false,
+  "stream": true,
+  "tools": [
+    {
+      "description": "lookup something",
+      "name": "lookup",
+      "type": "function"
+    }
+  ]
+}

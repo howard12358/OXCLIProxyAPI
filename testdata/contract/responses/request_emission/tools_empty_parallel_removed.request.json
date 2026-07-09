@@ -1,0 +1,7 @@
+{
+  "model": "codex-latest",
+  "input": "hello",
+  "tools": [],
+  "parallel_tool_calls": true,
+  "stream": false
+}

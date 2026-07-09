@@ -1,0 +1,26 @@
+{
+  "model": "codex-latest",
+  "input": [
+    {
+      "type": "message",
+      "role": "system",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "You are helpful."
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "hello"
+        }
+      ]
+    }
+  ],
+  "stream": false
+}

@@ -1,0 +1,31 @@
+{
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "input": [
+    {
+      "content": [
+        {
+          "text": "You are helpful.",
+          "type": "input_text"
+        }
+      ],
+      "role": "developer",
+      "type": "message"
+    },
+    {
+      "content": [
+        {
+          "text": "hello",
+          "type": "input_text"
+        }
+      ],
+      "role": "user",
+      "type": "message"
+    }
+  ],
+  "instructions": "",
+  "model": "gpt-5-codex",
+  "store": false,
+  "stream": true
+}

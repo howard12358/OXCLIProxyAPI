@@ -2,6 +2,10 @@ mod common;
 
 #[path = "contract/auth_retry.rs"]
 mod auth_retry;
+#[path = "contract/home_usage_lpush.rs"]
+mod home_usage_lpush;
+#[path = "contract/request_emission.rs"]
+mod request_emission;
 #[path = "contract/responses_golden.rs"]
 mod responses_golden;
 #[path = "contract/snapshot_schema.rs"]

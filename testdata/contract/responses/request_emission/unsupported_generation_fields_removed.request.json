@@ -1,0 +1,14 @@
+{
+  "model": "codex-latest",
+  "input": "hello",
+  "temperature": 0.8,
+  "top_p": 0.9,
+  "max_output_tokens": 1000,
+  "max_completion_tokens": 2000,
+  "truncation": "auto",
+  "context_management": {
+    "compaction": true
+  },
+  "user": "alice",
+  "stream": false
+}

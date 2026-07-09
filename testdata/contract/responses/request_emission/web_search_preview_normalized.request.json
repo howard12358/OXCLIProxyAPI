@@ -1,0 +1,13 @@
+{
+  "model": "codex-latest",
+  "input": "hello",
+  "tools": [
+    {
+      "type": "web_search_preview"
+    },
+    {
+      "type": "web_search_preview_2025_03_11"
+    }
+  ],
+  "stream": false
+}
