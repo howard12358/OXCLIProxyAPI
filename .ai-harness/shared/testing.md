@@ -88,6 +88,24 @@ Rust usage queue contract tests:
 cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract usage_queue
 ```
 
+Rust snapshot schema negative fixture tests:
+
+```bash
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract snapshot_schema
+```
+
+Rust `/v1/responses` Codex request emission golden matrix:
+
+```bash
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract request_emission
+```
+
+Rust Home mode external LPUSH usage contract test:
+
+```bash
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract home_usage_lpush
+```
+
 Rust `/v1/responses` Codex request emission golden matrix:
 
 ```bash
