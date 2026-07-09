@@ -88,6 +88,24 @@ Rust usage queue contract tests:
 cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract usage_queue
 ```
 
+Rust `/v1/responses` Codex request emission golden matrix:
+
+```bash
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract request_emission
+```
+
+Rust snapshot schema negative fixtures:
+
+```bash
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract snapshot_schema
+```
+
+Rust Home mode external LPUSH usage contract test:
+
+```bash
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract home_usage_lpush
+```
+
 Go data-plane proxy and usage bridge tests:
 
 ```bash
@@ -198,9 +216,9 @@ cargo test --workspace --manifest-path rust/cliproxy-data-plane/Cargo.toml
 - Full provider behavior matrix is broad; not every path is likely covered equally.
 - Multi-instance Rust data-plane lifecycle coverage is `待确认`.
 - Some validation currently depends on local manual stack checks and snapshot inspection.
-- The shared runtime snapshot contract fixtures currently cover Go exporter -> Rust parse/validate only; they do not yet cover schema version migration or broader negative fixtures.
-- The `/v1/responses` shared golden fixture now pins a Go-native Codex executor path and the Rust data-plane path against the same request/response contract; broader provider and streaming golden coverage is still partial.
-- Rust `/v1/responses` stream abort coverage now exercises both the streaming downstream path and the aggregate (stream=false over Codex SSE) path when the upstream connection drops mid-stream; the scenario matrix remains partial.
+- The shared runtime snapshot contract fixtures cover Go exporter -> Rust parse/validate plus negative fixtures for missing version, generated_at, source_instance_id, Codex auth access_token, empty model alias target, empty provider key, and provider missing model.
+- The `/v1/responses` shared golden fixture pins a Go-native Codex executor path and the Rust data-plane path against the same request/response contract; request emission golden fixtures cover input lifting, system->developer, reasoning, service_tier, tools/parallel_tool_calls, include injection, unsupported generation field stripping, and web_search_preview normalization.
+- Rust `/v1/responses` stream abort coverage exercises upstream-drop scenarios for both streaming and aggregate paths, plus a downstream-client drop scenario that verifies upstream cancellation and no success usage payload.
 - Rust auth health overlay currently has unit coverage and route coverage around retry paths, but it is still memory-only and not exercised under multi-process or restart scenarios.
 
 ## If Tests Are Missing

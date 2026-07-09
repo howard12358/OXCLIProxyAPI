@@ -22,6 +22,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Dedicated embedded Docker image build support exists through `Dockerfile.embedded` and the manual `docker-embedded-image` workflow, including selectable Rust `release` / `debug` build profiles; the manual workflow now accepts a `major.minor` release base, auto-increments the patch tag from Docker Hub, and refreshes `latest` for release-profile pushes, while the existing tag-driven Docker release remains unchanged.
 - The repository root `docker-compose.yml` now defaults to pulling `rustyllh/ox-cli-proxy-api:latest`, while `docker-build.sh` and `docker-build.ps1` remain the source-build entrypoints that produce a separate local image tag.
 - A repository smoke script now exists for embedded Docker deployments, covering `healthz`, runtime snapshot, non-stream and stream `/v1/responses`, usage queue pop, keeper reachability, and visible `[rs-stdout]` / `[rs-stderr]` prefixes in `docker logs`.
+- A human-readable embedded smoke runbook exists at `.ai-harness/runbooks/embedded-rust-data-plane-smoke.md` with step-by-step start, health-check, request, usage-queue, logging, and rollback instructions.
 - Embedded Rust data-plane state directories now keep the materialized binary and checksum files at the root while writing `stdout.log` and `stderr.log` under `logs/data-plane/`, with dedicated rotation and cleanup that is separate from Go application log retention; the supervisor also mirrors Rust stdout/stderr into the container's main stdout/stderr stream with stable prefixes so `docker logs` can see embedded Rust output.
 - When `data-plane.embedded.state-dir` is omitted, the embedded Rust data-plane state directory now defaults to the directory containing the running `CLIProxyAPI` executable.
 - Rust `/v1/responses` no longer falls back to local mock responses when no real upstream is available.
@@ -52,7 +53,11 @@ This document records durable repository-level state. It is not a per-session ta
   - single-node in-memory auth/model health overlay that derives cooldowns from Rust upstream failures and blocks candidate reuse until recovery
   - upstream request/response redaction helpers for logging
   - Codex native Responses array input and extra top-level request fields are preserved through Rust `/v1/responses` upstream normalization
-  - Codex request emission compatibility matrix covering forced rewrites, filtered unsupported fields, conditional `service_tier`, `system -> developer`, and web-search builtin tool alias normalization
+  - Codex request emission compatibility matrix covering forced rewrites, filtered unsupported fields, conditional `service_tier`, `system -> developer`, web-search builtin tool alias normalization, input lifting, reasoning/reasoning_effort, tools/parallel_tool_calls, include injection, and unsupported generation field stripping
+  - golden fixture tests that capture the normalized upstream request body sent to Codex for the emission matrix
+  - negative runtime snapshot fixtures and validation to guard against Go/Rust schema drift
+  - optional external RESP `LPUSH usage` forwarding for Home-mode usage aggregation
+  - downstream-client stream-abort test verifying upstream cancellation and no success usage payload
   - snapshot notify endpoint
   - runtime snapshot observation endpoint
   - graceful SIGTERM / Ctrl-C shutdown logging for the Rust data-plane listener
@@ -85,7 +90,7 @@ This document records durable repository-level state. It is not a per-session ta
 - Rust data-plane productization work may diverge from Go behavior if proxy, routing, or auth semantics are changed in only one runtime.
 - Test coverage appears stronger in selected areas than for full end-to-end production flows.
 - Some architectural intent lives in docs and current worktree changes, not only in released code.
-- Rust usage queue now exposes the CPA-compatible HTTP and RESP consumption paths, and CPA bridges Rust usage back into the external CPA queue. Home-mode direct Rust `LPUSH usage` forwarding is still not implemented.
+- Rust usage queue now exposes the CPA-compatible HTTP and RESP consumption paths, CPA bridges Rust usage back into the external CPA queue, and Rust can optionally forward usage payloads directly to an external Redis/CPA queue via RESP `LPUSH usage`.
 - Rust auth/model health overlay is memory-only and single-process; restart clears overlay state, and there is still no cross-instance synchronization.
 - Rust milestone-6 parity coverage now includes fixture-driven SSE framer checks derived from Go stream-repair samples, including malformed blank-line event/data cases, but it is still not a full Go fixture mirror.
 
