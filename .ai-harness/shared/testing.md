@@ -132,29 +132,34 @@ Rust Home mode external LPUSH usage contract test:
 cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract home_usage_lpush
 ```
 
-Rust `/v1/responses` Codex request emission golden matrix:
-
-```bash
-cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract request_emission
-```
-
-Rust snapshot schema negative fixtures:
-
-```bash
-cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract snapshot_schema
-```
-
-Rust Home mode external LPUSH usage contract test:
-
-```bash
-cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --test contract home_usage_lpush
-```
-
 Go data-plane proxy and usage bridge tests:
 
 ```bash
 go test ./internal/api -run 'TestDataPlaneUsageBridge|TestResponsesRouteProxiesToDataPlaneWhenConfigured|TestCodexDirectResponsesRouteProxiesToDataPlaneWhenConfigured|TestResponsesRouteUsesUpdatedRuntimeDataPlaneBaseURL' -count=1
 ```
+
+## CI Commands
+
+These commands are also run in GitHub Actions CI:
+
+Rust CI (`.github/workflows/rust-data-plane-ci.yml`):
+
+```bash
+cargo fmt --manifest-path rust/cliproxy-data-plane/Cargo.toml --check
+cargo clippy --manifest-path rust/cliproxy-data-plane/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --all-targets
+```
+
+Go CI (`.github/workflows/go-contract-ci.yml`):
+
+```bash
+go test ./internal/... -count=1
+go test ./sdk/... -count=1
+go test ./test/... -count=1
+go build -o /tmp/cli-proxy-api-check ./cmd/server
+```
+
+CI triggers: PR to `rusty`/`main`, push to `rusty`/`main`.
 
 ## Manual Validation
 
@@ -208,6 +213,8 @@ CONTAINER_NAME=ox-cli-proxy-api \
 ./scripts/embedded-smoke.sh
 ```
 
+Note: Docker image is `amd64` only; smoke cannot run on ARM64 Macs.
+
 ## Recommended Commands Before / After Changes
 
 Before changes:
@@ -258,7 +265,7 @@ cargo test --workspace --manifest-path rust/cliproxy-data-plane/Cargo.toml
 ## Current Coverage Risks
 
 - Full provider behavior matrix is broad; not every path is likely covered equally.
-- Multi-instance Rust data-plane lifecycle coverage is `待确认`.
+- Multi-instance Rust data-plane lifecycle coverage is 待确认.
 - Some validation currently depends on local manual stack checks and snapshot inspection.
 - The shared runtime snapshot contract fixtures cover Go exporter -> Rust parse/validate plus negative fixtures for missing version, generated_at, source_instance_id, Codex auth access_token, empty model alias target, empty provider key, and provider missing model.
 - The `/v1/responses` shared golden fixture pins a Go-native Codex executor path and the Rust data-plane path against the same request/response contract; request emission golden fixtures cover input lifting, system->developer, reasoning, service_tier, tools/parallel_tool_calls, include injection, unsupported generation field stripping, and web_search_preview normalization.

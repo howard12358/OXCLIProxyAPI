@@ -2,17 +2,18 @@
 
 This runbook validates the default embedded Rust data-plane deployment path.
 
-
-> **Execution status (2026-07-09):** Docker daemon unavailable on the current
-> machine, so the automated `embedded-smoke.sh` script could not be executed.
-> To run the smoke test yourself, ensure Docker Engine is running, then follow
-> the steps below.
+> **Execution status (2026-07-09):** The Docker image `rustyllh/ox-cli-proxy-api:latest`
+> does not provide a `linux/arm64/v8` manifest, so it cannot run on Apple Silicon Macs.
+> The smoke must be executed on an `amd64` Linux host or CI runner.
+> On this machine (`arm64`), `docker compose pull` returns:
+> `no matching manifest for linux/arm64/v8 in the manifest list entries`.
 
 ## Prerequisites
 
-- Docker Engine and `docker compose` (v2) installed.
+- Docker Engine and `docker compose` (v2) installed on **amd64 Linux**.
 - `curl` or equivalent HTTP client.
 - A valid `CPA_API_KEY` exported in your shell for the smoke requests.
+- Valid `config.yaml` with OAuth credentials and `auths/` directory.
 
 ## Start the Stack
 

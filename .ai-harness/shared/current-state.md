@@ -2,6 +2,12 @@
 
 This document records durable repository-level state. It is not a per-session task tracker.
 
+## Current Phase: Release Gate
+
+The project is in the **Embedded Rust Data Plane Release Gate** phase.
+The focus has shifted from feature development to release controllability:
+smoke validation, fallback verification, CI enforcement, and benchmark design.
+
 ## Current Stable Architecture
 
 - Main Go server is the primary proxy runtime and management plane.
@@ -23,9 +29,12 @@ This document records durable repository-level state. It is not a per-session ta
 - Dedicated embedded Docker image build support exists through `Dockerfile.embedded` and the manual `docker-embedded-image` workflow, including selectable Rust `release` / `debug` build profiles; the manual workflow now accepts a `major.minor` release base, auto-increments the patch tag from Docker Hub, and refreshes `latest` for release-profile pushes, while the existing tag-driven Docker release remains unchanged.
 - The repository root `docker-compose.yml` now defaults to pulling `rustyllh/ox-cli-proxy-api:latest`, while `docker-build.sh` and `docker-build.ps1` remain the source-build entrypoints that produce a separate local image tag.
 - A repository smoke script now exists for embedded Docker deployments, covering `healthz`, runtime snapshot, non-stream and stream `/v1/responses`, usage queue pop, keeper reachability, and visible `[rs-stdout]` / `[rs-stderr]` prefixes in `docker logs`.
-- A human-readable embedded smoke runbook exists at `.ai-harness/runbooks/embedded-rust-data-plane-smoke.md` with step-by-step start, health-check, request, usage-queue, logging, and rollback instructions (smoke not executable: Docker daemon unavailable).
+- A human-readable embedded smoke runbook exists at `.ai-harness/runbooks/embedded-rust-data-plane-smoke.md` with step-by-step start, health-check, request, usage-queue, logging, and rollback instructions.
 - A Rust data-plane fallback/disable operations doc exists at `docs/operations/rust-data-plane-fallback.md` covering default-embedded status, manual disable (`data-plane.mode: disabled`), Go-native fallback, log inspection, and rollback steps.
 - A contract coverage audit doc exists at `.ai-harness/shared/contract-coverage.md` documenting every contract test file's actual coverage, derived from code rather than docs.
+- A release gate checklist exists at `.ai-harness/shared/release-gate.md`.
+- A mock-upstream baseline benchmark runbook exists at `.ai-harness/runbooks/mock-upstream-baseline-benchmark.md`.
+- GitHub Actions CI exists for Rust (`rust-data-plane-ci.yml`: fmt, clippy, test) and Go (`go-contract-ci.yml`: internal, sdk, test, build).
 - Embedded Rust data-plane state directories now keep the materialized binary and checksum files at the root while writing `stdout.log` and `stderr.log` under `logs/data-plane/`, with dedicated rotation and cleanup that is separate from Go application log retention; the supervisor also mirrors Rust stdout/stderr into the container's main stdout/stderr stream with stable prefixes so `docker logs` can see embedded Rust output.
 - When `data-plane.embedded.state-dir` is omitted, the embedded Rust data-plane state directory now defaults to the directory containing the running `CLIProxyAPI` executable.
 - Rust `/v1/responses` no longer falls back to local mock responses when no real upstream is available.
@@ -48,8 +57,7 @@ This document records durable repository-level state. It is not a per-session ta
   - CPA-shaped usage queue payload emission for `/v1/responses` when `usage_queue.enabled=true` and `usage_queue.backend=redis`
   - CPA-compatible in-memory usage queue with subscriber fan-out, `support_refresh` / `refresh` control payloads, and pop semantics
   - HTTP usage queue pop endpoint at `/v0/management/usage-queue`
-  - Redis RESP usage protocol support for `AUTH`, `SUBSCRIBE usage/errors`, `LPOP usage`, and `RPOP usage`, verified via:
-    - `usage_queue` contract tests: HTTP pop FIFO+consuming, RESP LPOP/RPOP/AUTH, RESP SUBSCRIBE broadcast-without-buffering
+  - Redis RESP usage protocol support for `AUTH`, `SUBSCRIBE usage/errors`, `LPOP usage`, and `RPOP usage`, verified via contract tests
   - real RESP `errors` payload production for `/v1/responses` upstream failures
   - Go-side data-plane usage bridge that subscribes to Rust `usage` over Redis RESP and re-enqueues records into CPA redisqueue, with HTTP pop fallback
   - Go-side bridge auth selection that uses the embedded/local management password first and falls back to `MANAGEMENT_PASSWORD` for external data-plane dev stacks
@@ -57,45 +65,50 @@ This document records durable repository-level state. It is not a per-session ta
   - single-node in-memory auth/model health overlay that derives cooldowns from Rust upstream failures and blocks candidate reuse until recovery
   - upstream request/response redaction helpers for logging
   - Codex native Responses array input and extra top-level request fields are preserved through Rust `/v1/responses` upstream normalization
-  - Codex request emission compatibility matrix covering forced rewrites, filtered unsupported fields, conditional `service_tier`, `system -> developer`, web-search builtin tool alias normalization, input lifting, reasoning/reasoning_effort, tools/parallel_tool_calls, include injection, and unsupported generation field stripping
-  - 10 request emission golden fixtures that capture the normalized upstream request body sent to Codex:
-    - `input_string` — string input lifted to messages array
-    - `input_messages_array` — messages array input preserved
-    - `system_role_to_developer` — system role normalized to developer
-    - `reasoning_effort` — reasoning.effort extracted from extras
-    - `service_tier` — service_tier preserved/conditionally applied
-    - `tools_empty_parallel_removed` — parallel_tool_calls dropped when tools is empty
-    - `tools_non_empty_parallel_preserved` — tool schema and parallel_tool_calls preserved
-    - `include_encrypted_content_injected` — include[].encrypted_content injected
-    - `unsupported_generation_fields_removed` — temperature/top_p/max_output_tokens stripped
-    - `web_search_preview_normalized` — web_search_preview alias normalized to web_search
-  - runtime snapshot validation rejects bad snapshots for 9 boundary conditions:
-    - missing `version` / `generated_at` / `source_instance_id`
-    - Codex OAuth auth without `execution.codex.access_token`
-    - empty `auth_index` on auth records
-    - empty model alias upstream target
-    - enabled provider without `models` entry
-    - empty provider key in `providers`
-    - empty `listeners.public_http` (route missing target)
-  - optional external RESP `LPUSH usage` forwarding for Home-mode usage aggregation, tested via:
-    - `home_usage_lpush` contract test with fake RESP Redis server verifying AUTH + LPUSH usage payload via real `/v1/responses` request
-  - stream abort contract tests covering 3 scenarios:
-    - upstream SSE drops mid-stream on stream=true path (emits error frame)
-    - upstream SSE drops mid-stream on stream=false aggregate path (returns 502)
-    - downstream client drops after 2 SSE frames, verifying upstream cancellation and no success usage payload
+  - Codex request emission compatibility matrix (10 golden fixtures)
+  - runtime snapshot validation (9 negative fixtures + 1 positive)
+  - stream abort tests (3 scenarios: upstream drop stream, upstream drop aggregate, downstream client drop)
+  - downstream client abort verifying upstream cancellation and no success usage payload
+  - external RESP LPUSH usage for Home mode (1 contract test with fake RESP server)
   - snapshot notify endpoint
   - runtime snapshot observation endpoint
   - graceful SIGTERM / Ctrl-C shutdown logging for the Rust data-plane listener
 
+## Release Gate Status (2026-07-09)
+
+### Code Quality
+- [x] Rust `cargo fmt --check` passes
+- [x] Rust `cargo clippy --all-targets -- -D warnings` passes
+- [x] Rust `cargo test --all-targets` passes (41 + 24 + 22 tests)
+- [x] Go `go test ./internal/... ./sdk/... ./test/...` passes
+
+### Documentation
+- [x] `contract-coverage.md` up to date
+- [x] `current-state.md` reflects Release Gate phase
+- [x] `next-tasks.md` rewritten for Release Gate phase
+- [x] `release-gate.md` created
+- [x] Fallback/disable ops doc exists (`docs/operations/rust-data-plane-fallback.md`)
+- [x] Embedded smoke runbook exists (`.ai-harness/runbooks/embedded-rust-data-plane-smoke.md`)
+- [x] Benchmark runbook exists (`.ai-harness/runbooks/mock-upstream-baseline-benchmark.md`)
+
+### CI
+- [x] GitHub Actions CI for Rust (`rust-data-plane-ci.yml`) — added, remote run pending
+- [x] GitHub Actions CI for Go (`go-contract-ci.yml`) — added, remote run pending
+
+### Smoke / Fallback
+- [ ] Embedded smoke executed — blocked: Docker image has no `linux/arm64/v8` manifest
+- [ ] Fallback (`data-plane.mode: disabled`) verified in running deployment — pending
+
 ## Unfinished Or 待确认 Capabilities
 
 - Full production-grade Go-managed Rust instance registry / heartbeat lifecycle is not fully confirmed from current repository state.
-- Formal multi-instance Rust data-plane management is `待确认`.
-- Some deployment and management-center flows are partially documented externally; exact in-repo completeness is `待确认`.
-- Public `cpa-usage-keeper` login automation on the currently observed deployment remains `待确认` because the public login endpoints return `403 {"error":"fetch request required"}` while the same error string is not present in the inspected local keeper repository, indicating an external gate or deployed-version drift outside this repo.
+- Formal multi-instance Rust data-plane management is 待确认.
+- Some deployment and management-center flows are partially documented externally; exact in-repo completeness is 待确认.
+- Public `cpa-usage-keeper` login automation on the currently observed deployment remains 待确认 because the public login endpoints return `403 {"error":"fetch request required"}` while the same error string is not present in the inspected local keeper repository, indicating an external gate or deployed-version drift outside this repo.
 
 ## Current Active Development Direction
 
+- Release Gate: smoke, fallback, CI, benchmark design
 - Go-managed Rust data plane for `/v1/responses`
 - Runtime snapshot export / refresh / observability
 - Dev stack tooling in `Makefile`
@@ -118,6 +131,8 @@ This document records durable repository-level state. It is not a per-session ta
 - Rust usage queue now exposes the CPA-compatible HTTP and RESP consumption paths, CPA bridges Rust usage back into the external CPA queue, and Rust can optionally forward usage payloads directly to an external Redis/CPA queue via RESP `LPUSH usage`.
 - Rust auth/model health overlay is memory-only and single-process; restart clears overlay state, and there is still no cross-instance synchronization.
 - Rust milestone-6 parity coverage now includes fixture-driven SSE framer checks derived from Go stream-repair samples, including malformed blank-line event/data cases, but it is still not a full Go fixture mirror.
+- Embedded smoke cannot be executed on ARM64 Macs (Docker image is amd64 only).
+- CI workflows are added but have not been tested in GitHub Actions (remote run pending).
 
 ## Collaboration Boundaries
 
