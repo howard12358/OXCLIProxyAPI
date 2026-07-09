@@ -41,6 +41,7 @@ fn valid_snapshot_json() -> &'static str {
       "auth_pool": [
         {
           "id": "auth-1",
+          "auth_index": "auth-index-1",
           "provider": "codex",
           "auth_kind": "oauth",
           "priority": 100,

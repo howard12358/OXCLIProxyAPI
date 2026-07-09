@@ -68,6 +68,20 @@ fn rejects_invalid_snapshot_empty_provider_key() {
     assert!(err.to_string().contains("providers"));
 }
 
+#[test]
+fn rejects_invalid_snapshot_empty_auth_index() {
+    let snapshot = load_invalid_snapshot("runtime_snapshot.invalid_empty_auth_index.json");
+    let err = validate_snapshot(&snapshot).expect_err("fixture should fail validation");
+    assert!(err.to_string().contains("auth_index"));
+}
+
+#[test]
+fn rejects_invalid_snapshot_route_missing_target() {
+    let snapshot = load_invalid_snapshot("runtime_snapshot.invalid_route_missing_target.json");
+    let err = validate_snapshot(&snapshot).expect_err("fixture should fail validation");
+    assert!(err.to_string().contains("public_http"));
+}
+
 fn load_invalid_snapshot(name: &str) -> RuntimeSnapshot {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

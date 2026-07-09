@@ -166,6 +166,12 @@ pub fn validate_snapshot(snapshot: &RuntimeSnapshot) -> Result<()> {
                 auth.id
             );
         }
+        if auth.auth_index.trim().is_empty() {
+            bail!(
+                "snapshot.auth_pool contains auth {} with empty auth_index",
+                auth.id
+            );
+        }
         if auth.provider.trim().eq_ignore_ascii_case("codex")
             && auth.auth_kind.trim().eq_ignore_ascii_case("oauth")
         {
@@ -224,6 +230,7 @@ mod tests {
           "auth_pool": [
             {
               "id": "auth-1",
+              "auth_index": "auth-index-1",
               "provider": "codex",
               "auth_kind": "oauth",
               "priority": 100,
