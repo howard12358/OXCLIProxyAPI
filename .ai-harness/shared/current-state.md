@@ -38,6 +38,7 @@ smoke validation, fallback verification, CI enforcement, and benchmark design.
 - The embedded Docker image workflow hard-codes `linux/amd64,linux/arm64` and verifies pushed manifest lists with `docker buildx imagetools inspect --raw`; the already-published `latest` tag still requires a privileged republish before ARM64 smoke can be completed.
 - Embedded smoke now validates response structure, SSE lifecycle, usage executor type, and Rust log visibility. `scripts/data-plane-mode-smoke.sh` runs disabled and embedded configurations sequentially without mutating configuration files.
 - Rust stream abort contract coverage now includes a 10-client concurrent scenario: five downstream aborts, five successful streams, upstream cancellation, usage correctness, auth health preservation, and post-abort recovery.
+- Runtime snapshot export now derives `listeners.public_http` from the Go listener when the embedded child has not yet published its runtime base URL. This prevents valid `host: ""`, `port: 8317` configurations from crash-looping the Rust child during bootstrap.
 - Embedded Rust data-plane state directories now keep the materialized binary and checksum files at the root while writing `stdout.log` and `stderr.log` under `logs/data-plane/`, with dedicated rotation and cleanup that is separate from Go application log retention; the supervisor also mirrors Rust stdout/stderr into the container's main stdout/stderr stream with stable prefixes so `docker logs` can see embedded Rust output.
 - When `data-plane.embedded.state-dir` is omitted, the embedded Rust data-plane state directory now defaults to the directory containing the running `CLIProxyAPI` executable.
 - Rust `/v1/responses` no longer falls back to local mock responses when no real upstream is available.
@@ -135,6 +136,7 @@ smoke validation, fallback verification, CI enforcement, and benchmark design.
 - Rust auth/model health overlay is memory-only and single-process; restart clears overlay state, and there is still no cross-instance synchronization.
 - Rust milestone-6 parity coverage now includes fixture-driven SSE framer checks derived from Go stream-repair samples, including malformed blank-line event/data cases, but it is still not a full Go fixture mirror.
 - Embedded smoke cannot be executed on ARM64 Macs (Docker image is amd64 only).
+- A production smoke host exposed the fixed bootstrap boundary: its existing embedded image repeatedly rejected an empty `snapshot.listeners.public_http`. Deploying the snapshot exporter fix is required before that host can validate embedded mode.
 - CI workflows are added but have not been tested in GitHub Actions (remote run pending).
 
 ## Collaboration Boundaries

@@ -126,6 +126,18 @@ func TestBuildRuntimeSnapshotUsesRuntimeResponsesBaseURLOverride(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeSnapshotUsesGoListenerWhenDataPlaneURLIsNotReady(t *testing.T) {
+	now := time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)
+	snapshot := BuildRuntimeSnapshot(&config.Config{
+		Host: "",
+		Port: 8317,
+	}, coreauth.NewManager(nil, nil, nil), now)
+
+	if snapshot.Listeners.PublicHTTP != "http://127.0.0.1:8317" {
+		t.Fatalf("listeners.public_http = %q, want http://127.0.0.1:8317", snapshot.Listeners.PublicHTTP)
+	}
+}
+
 func TestBuildRuntimeSnapshotExportsUsageQueueConfig(t *testing.T) {
 	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
 

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -22,6 +23,7 @@ const (
 	defaultSessionTTLSeconds  = 3600
 	providerCodex             = "codex"
 	authKindOAuth             = "oauth"
+	defaultPublicHTTPPort     = 8317
 )
 
 type RuntimeSnapshot struct {
@@ -163,7 +165,21 @@ func dataPlanePublicHTTP(cfg *config.Config) string {
 	if cfg == nil {
 		return ""
 	}
-	return cfg.DataPlane.EffectiveResponsesBaseURL()
+	if baseURL := cfg.DataPlane.EffectiveResponsesBaseURL(); baseURL != "" {
+		return baseURL
+	}
+
+	// Embedded startup exports its first snapshot before the Rust child has an
+	// effective base URL. Keep the contract valid by describing the Go listener.
+	host := strings.TrimSpace(cfg.Host)
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	port := cfg.Port
+	if port <= 0 {
+		port = defaultPublicHTTPPort
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 func proxyURL(cfg *config.Config) string {
