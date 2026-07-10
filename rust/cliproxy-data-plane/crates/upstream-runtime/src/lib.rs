@@ -1,6 +1,6 @@
 use std::{
-    collections::HashMap,
     collections::BTreeMap,
+    collections::HashMap,
     env,
     pin::Pin,
     sync::{Arc, RwLock},
@@ -78,7 +78,8 @@ impl ProxySetting {
             return Ok(Self::Direct);
         }
 
-        let parsed = Url::parse(trimmed).with_context(|| format!("invalid proxy URL: {trimmed}"))?;
+        let parsed =
+            Url::parse(trimmed).with_context(|| format!("invalid proxy URL: {trimmed}"))?;
         match parsed.scheme() {
             "http" | "https" | "socks5" | "socks5h" => Ok(Self::Proxy(parsed)),
             other => bail!("unsupported proxy scheme: {other}"),
@@ -124,7 +125,8 @@ impl UpstreamRuntime {
     pub fn new(config: UpstreamRuntimeConfig) -> Self {
         let default_proxy = preferred_proxy_setting(&config, None)
             .expect("failed to resolve upstream proxy setting");
-        let client = build_client(&config, &default_proxy).expect("failed to build upstream http client");
+        let client =
+            build_client(&config, &default_proxy).expect("failed to build upstream http client");
         Self {
             config: Arc::new(config),
             default_client: client,
@@ -202,7 +204,10 @@ impl UpstreamRuntime {
         };
 
         match provider {
-            ProviderKind::Codex => self.execute_codex_with_auth(auth, request, proxy_override).await,
+            ProviderKind::Codex => {
+                self.execute_codex_with_auth(auth, request, proxy_override)
+                    .await
+            }
             ProviderKind::OpenAi => self.execute_openai(request, proxy_override).await,
             ProviderKind::Mock => bail!("mock provider is not handled by upstream runtime"),
         }
@@ -535,7 +540,9 @@ fn build_client(config: &UpstreamRuntimeConfig, setting: &ProxySetting) -> Resul
         }
     }
 
-    builder.build().context("failed to build upstream reqwest client")
+    builder
+        .build()
+        .context("failed to build upstream reqwest client")
 }
 
 /// 解析单次请求最终应采用的代理策略。
@@ -814,7 +821,10 @@ mod tests {
     #[test]
     fn redact_headers_masks_credentials_and_account_identity() {
         let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer secret-token"));
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret-token"),
+        );
         headers.insert("x-api-key", HeaderValue::from_static("openai-key"));
         headers.insert("chatgpt-account-id", HeaderValue::from_static("acct-42"));
         headers.insert(USER_AGENT, HeaderValue::from_static("cliproxy-test"));
@@ -825,12 +835,18 @@ mod tests {
             redacted.get("authorization").map(String::as_str),
             Some("<redacted>")
         );
-        assert_eq!(redacted.get("x-api-key").map(String::as_str), Some("<redacted>"));
+        assert_eq!(
+            redacted.get("x-api-key").map(String::as_str),
+            Some("<redacted>")
+        );
         assert_eq!(
             redacted.get("chatgpt-account-id").map(String::as_str),
             Some("<redacted>")
         );
-        assert_eq!(redacted.get("user-agent").map(String::as_str), Some("cliproxy-test"));
+        assert_eq!(
+            redacted.get("user-agent").map(String::as_str),
+            Some("cliproxy-test")
+        );
     }
 
     #[test]

@@ -348,8 +348,7 @@ pub fn extract_codex_session_id(metadata: Option<&Value>) -> Option<String> {
         && let Ok(parsed) = serde_json::from_str::<Value>(value)
         && let Some(session_id) = parsed.get("session_id").and_then(Value::as_str)
     {
-        return trim_to_owned(Some(session_id))
-            .map(|session_id| format!("codex:{session_id}"));
+        return trim_to_owned(Some(session_id)).map(|session_id| format!("codex:{session_id}"));
     }
     metadata
         .get("session_id")

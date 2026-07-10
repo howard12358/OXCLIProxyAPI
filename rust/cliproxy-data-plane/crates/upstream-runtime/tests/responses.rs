@@ -121,11 +121,14 @@ async fn execute_responses_calls_openai_upstream() {
     });
 
     let result = runtime
-        .execute_responses(UpstreamRequest {
-            model: "gpt-5".to_string(),
-            body: br#"{"model":"gpt-5","stream":false}"#.to_vec(),
-            stream: false,
-        }, None)
+        .execute_responses(
+            UpstreamRequest {
+                model: "gpt-5".to_string(),
+                body: br#"{"model":"gpt-5","stream":false}"#.to_vec(),
+                stream: false,
+            },
+            None,
+        )
         .await
         .expect("execute upstream");
 
@@ -157,11 +160,14 @@ async fn execute_responses_calls_codex_upstream() {
     });
 
     let result = runtime
-        .execute_responses(UpstreamRequest {
-            model: "gpt-5-codex".to_string(),
-            body: br#"{"model":"gpt-5-codex","stream":false}"#.to_vec(),
-            stream: false,
-        }, None)
+        .execute_responses(
+            UpstreamRequest {
+                model: "gpt-5-codex".to_string(),
+                body: br#"{"model":"gpt-5-codex","stream":false}"#.to_vec(),
+                stream: false,
+            },
+            None,
+        )
         .await
         .expect("execute upstream");
 
@@ -236,7 +242,12 @@ async fn execute_responses_for_auth_uses_selected_codex_oauth_credential() {
             assert_eq!(payload["auth"], "Bearer auth-specific-token");
             assert_eq!(payload["accept"], "application/json");
             assert_eq!(payload["originator"], "codex-tui");
-            assert!(payload["session_id"].as_str().unwrap_or_default().len() > 0);
+            assert!(
+                !payload["session_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .is_empty()
+            );
             assert_eq!(payload["account_id"], "acct_42");
             assert_eq!(
                 payload["user_agent"],

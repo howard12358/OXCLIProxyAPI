@@ -2,15 +2,13 @@
 
 This runbook validates the default embedded Rust data-plane deployment path.
 
-> **Execution status (2026-07-09):** The Docker image `rustyllh/ox-cli-proxy-api:latest`
-> does not provide a `linux/arm64/v8` manifest, so it cannot run on Apple Silicon Macs.
-> The smoke must be executed on an `amd64` Linux host or CI runner.
-> On this machine (`arm64`), `docker compose pull` returns:
-> `no matching manifest for linux/arm64/v8 in the manifest list entries`.
+> **Execution status (2026-07-10):** The repository workflow now builds and verifies
+> `linux/amd64` and `linux/arm64` manifests. The currently published `latest` tag must
+> be republished through `docker-embedded-image` before Apple Silicon validation can pass.
 
 ## Prerequisites
 
-- Docker Engine and `docker compose` (v2) installed on **amd64 Linux**.
+- Docker Engine and `docker compose` (v2) installed on Linux or macOS.
 - `curl` or equivalent HTTP client.
 - A valid `CPA_API_KEY` exported in your shell for the smoke requests.
 - Valid `config.yaml` with OAuth credentials and `auths/` directory.
@@ -22,6 +20,15 @@ docker compose up -d
 ```
 
 Wait 10-20 seconds for the Go management plane and embedded Rust data-plane to bootstrap.
+
+Before an Apple Silicon deployment, verify the published manifest:
+
+```bash
+docker buildx imagetools inspect rustyllh/ox-cli-proxy-api:latest
+```
+
+The output must list both `linux/amd64` and `linux/arm64`. If it does not, republish
+with the `docker-embedded-image` workflow; do not set a permanent Compose platform override.
 
 ## Verify Go Management Plane
 
@@ -124,3 +131,27 @@ KEEPER_URL=http://127.0.0.1:28081 \
 CONTAINER_NAME=ox-cli-proxy-api \
 ./scripts/embedded-smoke.sh
 ```
+
+The script validates response structure, SSE `response.created`/`response.completed`,
+the expected usage `executor_type`, usage queue delivery, and Rust log prefixes. Set
+`KEEPER_URL` only when the optional keeper reachability check is required.
+
+## Disabled-to-Embedded Fallback Smoke
+
+Prepare two complete configuration files using the same auth and usage settings:
+
+- `disabled.yaml` contains `data-plane.mode: disabled`.
+- `embedded.yaml` omits `data-plane` or selects `data-plane.mode: embedded`.
+
+Then run the repeatable two-pass smoke:
+
+```bash
+EMBEDDED_CONFIG=/absolute/path/embedded.yaml \
+DISABLED_CONFIG=/absolute/path/disabled.yaml \
+MANAGEMENT_KEY=<management-key> \
+API_KEY=<api-key> \
+./scripts/data-plane-mode-smoke.sh
+```
+
+It starts disabled mode first and requires `CodexExecutor` usage without Rust child logs;
+then it restarts in embedded mode and requires `RustResponsesExecutor` plus `[rs-*]` logs.

@@ -123,8 +123,9 @@ The Rust data plane adds a header to responses when it handles a request:
 curl -v http://127.0.0.1:8317/v1/responses ... 2>&1 | grep -i 'x-cliproxy\|server'
 ```
 
-Additionally, check usage queue records — Rust-originated payloads have
-`executor_type: "RustResponsesExecutor"` while Go-native has `"GoCodexExecutor"`.
+Additionally, check usage queue records. Rust-originated payloads have
+`executor_type: "RustResponsesExecutor"`; the current Go-native Codex executor
+emits `executor_type: "CodexExecutor"` (the Go type name).
 
 ## 11. Rollback Steps
 
@@ -153,7 +154,7 @@ To roll back to Go-native `/v1/responses`:
    There should be no recent `[rs-stdout]` / `[rs-stderr]` lines.
 
 4. Send a test request and check the usage queue — executor_type should be
-   `GoCodexExecutor`, not `RustResponsesExecutor`.
+   `CodexExecutor`, not `RustResponsesExecutor`.
 
 ## Reference: DataPlaneConfig
 

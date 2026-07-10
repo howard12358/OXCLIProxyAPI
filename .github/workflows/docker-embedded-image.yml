@@ -11,10 +11,6 @@ on:
         description: Docker Hub namespace; empty uses DOCKERHUB_USERNAME secret
         required: false
         default: ""
-      platforms:
-        description: Build platforms
-        required: true
-        default: linux/amd64,linux/arm64
       rust_profile:
         description: Rust build profile
         required: true
@@ -127,9 +123,10 @@ jobs:
         with:
           context: .
           file: Dockerfile.embedded
-          platforms: ${{ inputs.platforms }}
+          # The compose default must be directly runnable on both Docker Hub
+          # supported desktop architectures. Do not make this caller-selectable.
+          platforms: linux/amd64,linux/arm64
           push: ${{ inputs.push }}
-          load: ${{ !inputs.push && inputs.platforms == 'linux/amd64' }}
           build-args: |
             VERSION=${{ env.VERSION }}
             COMMIT=${{ env.COMMIT }}
@@ -138,3 +135,25 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: ${{ env.IMAGE_TAGS }}
+
+      - name: Verify pushed multi-architecture manifests
+        if: inputs.push
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          verify_manifest() {
+            local image="$1"
+            local raw
+            raw="$(docker buildx imagetools inspect "${image}" --raw)"
+            printf '%s' "${raw}" | jq -e '
+              .manifests | map(select(.platform.os == "linux") | .platform.architecture) |
+              (index("amd64") != null) and (index("arm64") != null)
+            ' >/dev/null
+            echo "verified linux/amd64 and linux/arm64 manifest: ${image}"
+          }
+
+          verify_manifest "${DOCKERHUB_REPO}:${VERSION}"
+          if [ -n "${LATEST_TAG}" ]; then
+            verify_manifest "${LATEST_TAG}"
+          fi

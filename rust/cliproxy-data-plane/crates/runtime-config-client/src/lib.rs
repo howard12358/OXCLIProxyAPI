@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 /// runtime snapshot 的来源。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SnapshotSource {
-    File { path: PathBuf },
+    File {
+        path: PathBuf,
+    },
     Http {
         url: String,
         bearer_token: Option<String>,
@@ -73,7 +75,11 @@ impl RuntimeConfigClient {
                 .with_context(|| format!("failed to read snapshot file {}", path.display()))?,
             SnapshotSource::Http { url, bearer_token } => {
                 let mut request = self.http_client.get(url);
-                if let Some(token) = bearer_token.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty()) {
+                if let Some(token) = bearer_token
+                    .as_ref()
+                    .map(|value| value.trim())
+                    .filter(|value| !value.is_empty())
+                {
                     request = request.header(
                         AUTHORIZATION,
                         HeaderValue::from_str(&format!("Bearer {token}"))
