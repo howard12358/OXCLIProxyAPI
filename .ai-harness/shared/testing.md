@@ -37,19 +37,19 @@ cargo test --workspace --manifest-path rust/cliproxy-data-plane/Cargo.toml
 Rust format check:
 
 ```bash
-cargo fmt --manifest-path rust/cliproxy-data-plane/Cargo.toml --check
+cargo fmt --manifest-path rust/cliproxy-data-plane/Cargo.toml --all -- --check
 ```
 
 Rust clippy with warnings-as-errors:
 
 ```bash
-cargo clippy --manifest-path rust/cliproxy-data-plane/Cargo.toml --all-targets -- -D warnings
+cargo clippy --manifest-path rust/cliproxy-data-plane/Cargo.toml --workspace --all-targets --all-features -- -D warnings
 ```
 
 Rust all-targets test:
 
 ```bash
-cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --all-targets
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --workspace --all-targets --all-features
 ```
 
 Rust route-focused test:
@@ -145,18 +145,16 @@ These commands are also run in GitHub Actions CI:
 Rust CI (`.github/workflows/rust-data-plane-ci.yml`):
 
 ```bash
-cargo fmt --manifest-path rust/cliproxy-data-plane/Cargo.toml --check
-cargo clippy --manifest-path rust/cliproxy-data-plane/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --all-targets
+cargo fmt --manifest-path rust/cliproxy-data-plane/Cargo.toml --all -- --check
+cargo clippy --manifest-path rust/cliproxy-data-plane/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+cargo test --manifest-path rust/cliproxy-data-plane/Cargo.toml --workspace --all-targets --all-features
 ```
 
 Go CI (`.github/workflows/go-contract-ci.yml`):
 
 ```bash
-go test ./internal/... -count=1
-go test ./sdk/... -count=1
-go test ./test/... -count=1
-go build -o /tmp/cli-proxy-api-check ./cmd/server
+go test ./... -count=1
+go build ./...
 ```
 
 CI triggers: PR to `rusty`/`main`, push to `rusty`/`main`.

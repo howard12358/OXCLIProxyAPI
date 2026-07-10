@@ -34,7 +34,10 @@ smoke validation, fallback verification, CI enforcement, and benchmark design.
 - A contract coverage audit doc exists at `.ai-harness/shared/contract-coverage.md` documenting every contract test file's actual coverage, derived from code rather than docs.
 - A release gate checklist exists at `.ai-harness/shared/release-gate.md`.
 - A mock-upstream baseline benchmark runbook exists at `.ai-harness/runbooks/mock-upstream-baseline-benchmark.md`.
-- GitHub Actions CI exists for Rust (`rust-data-plane-ci.yml`: fmt, clippy, test) and Go (`go-contract-ci.yml`: internal, sdk, test, build).
+- GitHub Actions CI exists for Rust (`rust-data-plane-ci.yml`: workspace fmt, clippy, test with all features) and Go (`go-contract-ci.yml`: full workspace test and build).
+- The embedded Docker image workflow hard-codes `linux/amd64,linux/arm64` and verifies pushed manifest lists with `docker buildx imagetools inspect --raw`; the already-published `latest` tag still requires a privileged republish before ARM64 smoke can be completed.
+- Embedded smoke now validates response structure, SSE lifecycle, usage executor type, and Rust log visibility. `scripts/data-plane-mode-smoke.sh` runs disabled and embedded configurations sequentially without mutating configuration files.
+- Rust stream abort contract coverage now includes a 10-client concurrent scenario: five downstream aborts, five successful streams, upstream cancellation, usage correctness, auth health preservation, and post-abort recovery.
 - Embedded Rust data-plane state directories now keep the materialized binary and checksum files at the root while writing `stdout.log` and `stderr.log` under `logs/data-plane/`, with dedicated rotation and cleanup that is separate from Go application log retention; the supervisor also mirrors Rust stdout/stderr into the container's main stdout/stderr stream with stable prefixes so `docker logs` can see embedded Rust output.
 - When `data-plane.embedded.state-dir` is omitted, the embedded Rust data-plane state directory now defaults to the directory containing the running `CLIProxyAPI` executable.
 - Rust `/v1/responses` no longer falls back to local mock responses when no real upstream is available.
@@ -74,13 +77,13 @@ smoke validation, fallback verification, CI enforcement, and benchmark design.
   - runtime snapshot observation endpoint
   - graceful SIGTERM / Ctrl-C shutdown logging for the Rust data-plane listener
 
-## Release Gate Status (2026-07-09)
+## Release Gate Status (2026-07-10)
 
 ### Code Quality
-- [x] Rust `cargo fmt --check` passes
-- [x] Rust `cargo clippy --all-targets -- -D warnings` passes
-- [x] Rust `cargo test --all-targets` passes (41 + 24 + 22 tests)
-- [x] Go `go test ./internal/... ./sdk/... ./test/...` passes
+- [x] Rust `cargo fmt --all -- --check` passes
+- [x] Rust `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
+- [x] Rust `cargo test --workspace --all-targets --all-features` passes
+- [x] Go `go test ./...` and `go build ./...` pass
 
 ### Documentation
 - [x] `contract-coverage.md` up to date
@@ -92,12 +95,12 @@ smoke validation, fallback verification, CI enforcement, and benchmark design.
 - [x] Benchmark runbook exists (`.ai-harness/runbooks/mock-upstream-baseline-benchmark.md`)
 
 ### CI
-- [x] GitHub Actions CI for Rust (`rust-data-plane-ci.yml`) — added, remote run pending
-- [x] GitHub Actions CI for Go (`go-contract-ci.yml`) — added, remote run pending
+- [x] GitHub Actions CI for Rust (`rust-data-plane-ci.yml`) — remote run succeeded before its command-strengthening update; new run pending
+- [x] GitHub Actions CI for Go (`go-contract-ci.yml`) — remote run succeeded before its command-strengthening update; new run pending
 
 ### Smoke / Fallback
-- [ ] Embedded smoke executed — blocked: Docker image has no `linux/arm64/v8` manifest
-- [ ] Fallback (`data-plane.mode: disabled`) verified in running deployment — pending
+- [ ] Embedded smoke executed — blocked until the fixed multi-arch image is republished and a credentialed mock/real deployment is available
+- [ ] Fallback (`data-plane.mode: disabled`) verified in running deployment — repeatable runner exists; runtime execution pending
 
 ## Unfinished Or 待确认 Capabilities
 

@@ -3,11 +3,11 @@
 ## Required Before Default Enable
 
 ### Code Quality
-- [x] Rust `cargo fmt --check` passes
-- [x] Rust `cargo clippy --all-targets -- -D warnings` passes
-- [x] Rust `cargo test --all-targets` passes (41 + 24 + 22 tests)
+- [x] Rust `cargo fmt --all -- --check` passes
+- [x] Rust `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
+- [x] Rust `cargo test --workspace --all-targets --all-features` passes
 - [x] Rust contract tests pass (10 test files)
-- [x] Go `go test ./internal/... ./sdk/... ./test/...` passes
+- [x] Go `go test ./...` and `go build ./...` pass
 
 ### Documentation
 - [x] `contract-coverage.md` up to date
@@ -18,12 +18,12 @@
 - [x] `data-plane.mode: disabled` fallback path documented
 - [ ] Embedded smoke executed in real Docker environment
 - [ ] Fallback smoke executed or explicitly marked pending
-- [ ] Benchmark runbook exists
+- [x] Benchmark runbook exists
 
 ### CI / Automation
-- [ ] GitHub Actions CI for Rust fmt / clippy / tests
-- [ ] GitHub Actions CI for Go internal / sdk / test
-- [ ] CI or manual workflow for embedded Docker smoke
+- [x] GitHub Actions CI for Rust fmt / clippy / tests (remote run success before strengthened command update)
+- [x] GitHub Actions CI for Go full test / build (remote run success before strengthened command update)
+- [x] Manual embedded Docker smoke workflow and fallback runner exist
 
 ## Default Enable Criteria
 
@@ -35,7 +35,7 @@ When all of the following are confirmed in a real deployment:
 - `/v1/responses` `stream=true` returns valid SSE stream
 - `/v0/management/usage-queue` contains valid CPA-shaped payloads
 - Logs show `RustResponsesExecutor` on the embedded path
-- `data-plane.mode: disabled` falls back to `GoCodexExecutor`
+- `data-plane.mode: disabled` falls back to `CodexExecutor`
 - Downstream client abort does not leak upstream connections
 - Snapshot validation rejects invalid snapshots
 - Codex request emission golden tests pass

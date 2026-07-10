@@ -8,20 +8,21 @@ Rust `/v1/responses` embedded data-plane 已具备较完整的契约测试体系
 
 ## P0 — Must Complete Before Default Enable
 
+- [ ] Republish `rustyllh/ox-cli-proxy-api:latest` through `docker-embedded-image` and inspect its manifest from an ARM64 host
 - [ ] Execute embedded smoke in a real Docker environment (`scripts/embedded-smoke.sh`)
 - [ ] Record smoke result in `current-state.md` and smoke runbook
 - [ ] Verify `data-plane.mode: disabled` fallback path in a running deployment
-- [ ] Confirm logs clearly differentiate `RustResponsesExecutor` from `GoCodexExecutor`
-- [ ] Add GitHub Actions CI for Rust `fmt` / `clippy` / `cargo test`
-- [ ] Add GitHub Actions CI for Go `internal` / `sdk` / `test` contract tests
-- [ ] Document release gate checklist (see `release-gate.md`)
+- [x] Confirm executor identity: Rust uses `RustResponsesExecutor`; Go native uses `CodexExecutor`
+- [x] Add GitHub Actions CI for Rust `fmt` / `clippy` / `cargo test`
+- [x] Add GitHub Actions CI for Go full test / build
+- [x] Document release gate checklist (see `release-gate.md`)
 
 ## P1 — Should Complete Before Default Enable
 
-- [ ] Create mock-upstream baseline benchmark runbook
+- [x] Create mock-upstream baseline benchmark runbook
 - [ ] Compare Go native vs embedded Rust `/v1/responses` (non-stream response correctness)
 - [ ] Exercise the `data-plane.mode: disabled` fallback in a real container
-- [ ] Verify stream abort connection cleanup under concurrent load (10+ clients)
+- [x] Verify stream abort connection cleanup under concurrent load (10 clients)
 
 ## P2 — Nice to Have
 
@@ -29,7 +30,7 @@ Rust `/v1/responses` embedded data-plane 已具备较完整的契约测试体系
 - [ ] Measure RSS, CPU, P95/P99 for Rust vs Go `/v1/responses` under mock upstream
 - [ ] Add RESP `errors` channel contract test
 - [ ] Add multi-auth retry-on-abort contract test
-- [ ] Document default-enable criteria explicitly
+- [x] Document default-enable criteria explicitly
 
 ## Not Doing Now
 

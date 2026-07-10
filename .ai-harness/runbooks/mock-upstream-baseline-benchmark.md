@@ -3,7 +3,7 @@
 This runbook describes how to benchmark the embedded Rust `/v1/responses` data plane
 against the Go native path using a mock upstream (no real AI provider).
 
-> **Status**: documented, not yet executed.
+> **Status**: runner available at `scripts/bench/mock-upstream-baseline.sh`; baseline execution pending a local mock-upstream stack.
 
 ## Prerequisites
 
@@ -91,7 +91,26 @@ To compare Go native vs Rust:
 
 ## Script Location
 
-Benchmark scripts should live under `scripts/bench/` when implemented.
+Run the benchmark twice, once with disabled mode and once with embedded mode:
+
+```bash
+MOCK_UPSTREAM_CONFIRMED=1 \
+MODE=go-native \
+BASE_URL=http://127.0.0.1:8317 \
+API_KEY=<test-key> \
+./scripts/bench/mock-upstream-baseline.sh
+
+MOCK_UPSTREAM_CONFIRMED=1 \
+MODE=embedded-rust \
+BASE_URL=http://127.0.0.1:8317 \
+API_KEY=<test-key> \
+./scripts/bench/mock-upstream-baseline.sh
+```
+
+The runner covers small/large non-stream requests, short/long streams, and bounded
+stream aborts. It writes JSON and Markdown results under `artifacts/bench/`, recording
+the commit, platform, per-scenario P50/P95/P99, error rate, and `docker stats` snapshot
+when the configured container exists. It refuses to run unless `MOCK_UPSTREAM_CONFIRMED=1`.
 
 ## Success Criteria (for Default Enable)
 
