@@ -2,9 +2,11 @@
 
 This runbook validates the default embedded Rust data-plane deployment path.
 
-> **Execution status (2026-07-10):** The repository workflow now builds and verifies
-> `linux/amd64` and `linux/arm64` manifests. The currently published `latest` tag must
-> be republished through `docker-embedded-image` before Apple Silicon validation can pass.
+> **Execution status (2026-07-10):** The repository workflow defaults to building and
+> verifying `linux/amd64` and `linux/arm64` manifests. For a faster validation build, the
+> manual workflow may select `linux/amd64` only; that tag cannot be used on Apple Silicon.
+> The currently published `latest` tag must be republished with both platforms before Apple
+> Silicon validation can pass.
 
 ## Prerequisites
 

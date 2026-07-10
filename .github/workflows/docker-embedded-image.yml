@@ -11,6 +11,10 @@ on:
         description: Docker Hub namespace; empty uses DOCKERHUB_USERNAME secret
         required: false
         default: ""
+      platforms:
+        description: Comma-separated target platforms; use linux/amd64 for a fast single-architecture validation build
+        required: true
+        default: linux/amd64,linux/arm64
       rust_profile:
         description: Rust build profile
         required: true
@@ -123,9 +127,7 @@ jobs:
         with:
           context: .
           file: Dockerfile.embedded
-          # The compose default must be directly runnable on both Docker Hub
-          # supported desktop architectures. Do not make this caller-selectable.
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ inputs.platforms }}
           push: ${{ inputs.push }}
           build-args: |
             VERSION=${{ env.VERSION }}
@@ -136,21 +138,31 @@ jobs:
           cache-to: type=gha,mode=max
           tags: ${{ env.IMAGE_TAGS }}
 
-      - name: Verify pushed multi-architecture manifests
+      - name: Verify pushed image manifests
         if: inputs.push
         shell: bash
         run: |
           set -euo pipefail
 
+          requested_platforms="${{ inputs.platforms }}"
+          if ! printf '%s' "${requested_platforms}" | grep -Eq '^linux/(amd64|arm64)(,linux/(amd64|arm64))*$'; then
+            echo "platforms must be a comma-separated subset of linux/amd64,linux/arm64" >&2
+            exit 1
+          fi
+
           verify_manifest() {
             local image="$1"
             local raw
             raw="$(docker buildx imagetools inspect "${image}" --raw)"
-            printf '%s' "${raw}" | jq -e '
-              .manifests | map(select(.platform.os == "linux") | .platform.architecture) |
-              (index("amd64") != null) and (index("arm64") != null)
-            ' >/dev/null
-            echo "verified linux/amd64 and linux/arm64 manifest: ${image}"
+            local platform os arch
+            for platform in ${requested_platforms//,/ }; do
+              os="${platform%%/*}"
+              arch="${platform##*/}"
+              printf '%s' "${raw}" | jq -e --arg os "${os}" --arg arch "${arch}" '
+                .manifests | any(.[]; .platform.os == $os and .platform.architecture == $arch)
+              ' >/dev/null
+            done
+            echo "verified requested manifest platforms (${requested_platforms}): ${image}"
           }
 
           verify_manifest "${DOCKERHUB_REPO}:${VERSION}"
